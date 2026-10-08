@@ -1,0 +1,16 @@
+# Run with `dart run ffigen --config ffigen.yaml`.
+name: AudDspSamplerBindings
+description: |
+  Bindings for `src/aud_dsp_sampler.h`.
+
+  Regenerate bindings with `dart run ffigen --config ffigen.yaml`.
+output: 'lib/aud_dsp_sampler_bindings_generated.dart'
+headers:
+  entry-points:
+    - 'src/aud_dsp_sampler.h'
+  include-directives:
+    - 'src/aud_dsp_sampler.h'
+ffi-native:
+comments:
+  style: any
+  length: full
