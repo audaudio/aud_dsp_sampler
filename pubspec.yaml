@@ -1,6 +1,6 @@
 name: aud_dsp_sampler
 description: "SFZ sampler node of the Audanika Audio Engine on the sfizz fork"
-version: 0.0.2
+version: 0.1.0
 publish_to: none
 homepage: https://github.com/audaudio/aud_dsp_sampler
 repository: https://github.com/audaudio/aud_dsp_sampler
