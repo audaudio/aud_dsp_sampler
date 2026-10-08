@@ -5,6 +5,7 @@
 ### Added
 
 - Add the sfizz sampler node
+- Add the sfizz vendoring script
 
 ## 0.0.2 - 2026-10-08
 

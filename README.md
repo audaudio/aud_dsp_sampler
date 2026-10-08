@@ -31,7 +31,9 @@ that the node needs — the translation units the linker pulls
 (`SOURCES.txt`) and their header closure — with the include directories
 in `INCLUDES.txt`; the build hook compiles them together with the node.
 Every component's license is listed in `src/third_party/NOTICES.md`.
-Refresh the subset by building the fork with its own CMake, linking a
-probe against the static libraries with a linker map, and collecting the
-header closure with `clang -MM` (the script of ticket 5 lives in the
-ticket's notes; it becomes a package script with ticket S9).
+Refresh the subset with `scripts/vendor_sfizz.py`: build the fork with its
+own CMake for every architecture family (arm64 and x86_64, e.g. macOS, the
+iOS simulator and the Android NDK), link a probe program against the
+static libraries with a linker map per family, and pass the checkout, the
+build directories and the maps to the script; it collects the header
+closure with `clang -MM` and writes the manifests.
