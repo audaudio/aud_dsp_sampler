@@ -7,6 +7,10 @@
 - Add the sfizz sampler node
 - Add the sfizz vendoring script
 
+### Changed
+
+- Port the vendoring script to Node.js
+
 ## 0.0.2 - 2026-10-08
 
 ### Added
