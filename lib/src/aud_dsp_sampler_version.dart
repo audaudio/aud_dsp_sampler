@@ -9,4 +9,4 @@
 // coverage:ignore-file
 
 /// The version of the `aud_dsp_sampler` package.
-const String audDspSamplerVersion = '0.0.2';
+const String audDspSamplerVersion = '0.1.0';
