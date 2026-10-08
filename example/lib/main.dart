@@ -1,72 +1,30 @@
+// @license
+// Copyright (c) Audanika. All Rights Reserved.
+//
+// Use of this source code is governed by terms that can be
+// found in the LICENSE file in the root of this package.
+
+import 'package:aud_dsp_sampler/aud_dsp_sampler.dart';
 import 'package:flutter/material.dart';
 
-import 'dart:async';
-
-import 'package:aud_dsp_sampler/aud_dsp_sampler.dart' as aud_dsp_sampler;
-
 void main() {
-  runApp(const MyApp());
+  runApp(const AudDspSamplerExampleApp());
 }
 
-class MyApp extends StatefulWidget {
-  const MyApp({super.key});
-
-  @override
-  State<MyApp> createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> {
-  late int sumResult;
-  late Future<int> sumAsyncResult;
-
-  @override
-  void initState() {
-    super.initState();
-    sumResult = aud_dsp_sampler.sum(1, 2);
-    sumAsyncResult = aud_dsp_sampler.sumAsync(3, 4);
-  }
+/// Names the node types of the package; the example app of `aud_audio`
+/// plays them.
+class AudDspSamplerExampleApp extends StatelessWidget {
+  /// Creates the example app.
+  const AudDspSamplerExampleApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    const textStyle = TextStyle(fontSize: 25);
-    const spacerSmall = SizedBox(height: 10);
     return MaterialApp(
       home: Scaffold(
-        appBar: AppBar(title: const Text('Native Packages')),
-        body: SingleChildScrollView(
-          child: Container(
-            padding: const .all(10),
-            child: Column(
-              children: [
-                const Text(
-                  'This calls a native function through FFI that is shipped as source in the package. '
-                  'The native code is built as part of the Flutter Runner build.',
-                  style: textStyle,
-                  textAlign: .center,
-                ),
-                spacerSmall,
-                Text(
-                  'sum(1, 2) = $sumResult',
-                  style: textStyle,
-                  textAlign: .center,
-                ),
-                spacerSmall,
-                FutureBuilder<int>(
-                  future: sumAsyncResult,
-                  builder: (BuildContext context, AsyncSnapshot<int> value) {
-                    final displayValue = (value.hasData)
-                        ? value.data
-                        : 'loading';
-                    return Text(
-                      'await sumAsync(3, 4) = $displayValue',
-                      style: textStyle,
-                      textAlign: .center,
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
+        appBar: AppBar(title: const Text('aud_dsp_sampler')),
+        body: const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text('Node types: ${AudSfzSampler.typeId}'),
         ),
       ),
     );

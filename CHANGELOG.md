@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add the sfizz sampler node
+
 ## 0.0.2 - 2026-10-08
 
 ### Added
