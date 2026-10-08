@@ -1,0 +1,19 @@
+// @license
+// Copyright (c) Audanika. All Rights Reserved.
+//
+// Use of this source code is governed by terms that can be
+// found in the LICENSE file in the root of this package.
+
+{
+  "name": "aud_dsp_sampler",
+  "summary": "SFZ sampler node of the Audanika Audio Engine on the sfizz fork.",
+  "domain": [
+    "SFZ sampler node of the Audanika Audio Engine on the sfizz fork"
+  ],
+  "interfaces": {
+    "uses": {
+      "aud_audio_core": "package dependency"
+    },
+    "usedBy": {}
+  }
+}
