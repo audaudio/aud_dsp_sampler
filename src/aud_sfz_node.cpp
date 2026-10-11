@@ -10,9 +10,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <new>
 
 #include "aud_ump.h"
+
 #include "FilePool.h"
 #include "Messaging.h"
 #include "Region.h"
@@ -21,13 +23,35 @@
 namespace aud_sfz {
 namespace {
 
+// The longest finite tail, in frames.
+constexpr uint32_t kLongestTail = AUD_TAIL_INFINITE - 1;
+// The arguments of a message to sfizz: no path of sfizz takes more.
+constexpr uint32_t kMaxMessageArgs = 4;
+// The arguments of an answer of sfizz the node passes on.
+constexpr uint32_t kMaxReplyArgs = 16;
+// The bytes of a MIDI message in an answer of sfizz.
+constexpr uint32_t kMidiMessageBytes = 4;
+// The largest value of a 7-bit MIDI 1.0 data byte, and the centre of the
+// 14-bit pitch bend.
+constexpr float kMax7Bit = 127.0f;
+constexpr int kPitchBendCentre = 8192;
+// The mask of a 7-bit MIDI 1.0 data byte, and the shift of the program in
+// the second word of a MIDI 2.0 program change.
+constexpr uint32_t kDataMask = 0x7f;
+constexpr uint32_t kMidi2ProgramShift = 24;
+
 // ............................................................................
 // The engine as the host of the pools (ticket 25)
 
-bool postTask(void* context, void (*run)(void*), void* user) {
-  const auto* host = static_cast<const AudHostApi*>(context);
+// [any thread] Queues a task for a worker of the engine; AUD_OK or the error
+// code of post_task.
+int32_t post(const AudHostApi* host, void (*run)(void*), void* user) {
   const AudTask task{sizeof(AudTask), 0, run, user};
-  return host->post_task(host->host, &task) == AUD_OK;
+  return host->post_task(host->host, &task);
+}
+
+bool postTask(void* context, void (*run)(void*), void* user) {
+  return post(static_cast<const AudHostApi*>(context), run, user) == AUD_OK;
 }
 
 void bytesChanged(void* context, int64_t delta) {
@@ -46,6 +70,11 @@ sfz::FileHost fileHostOf(const AudHostApi* host) {
 void deleteSynth(void* user) { delete static_cast<sfz::Synth*>(user); }
 
 float gainOf(float db) { return std::pow(10.0f, db / 20.0f); }
+
+// [control] Logs an error of the node, when the host takes logs.
+void logError(const AudHostApi* host, const char* message) {
+  if (host->log != nullptr) host->log(host->host, AUD_LOG_ERROR, message);
+}
 
 // ............................................................................
 // Synths that do not render
@@ -67,8 +96,7 @@ Config snapshot(Shared& shared) {
   Config config = shared.config;
   config.polyphony = shared.polyphony.load(std::memory_order_acquire);
   config.sampleQuality = shared.sampleQuality.load(std::memory_order_acquire);
-  config.oscillatorQuality =
-      shared.oscillatorQuality.load(std::memory_order_acquire);
+  config.oscillatorQuality = shared.oscillatorQuality.load(std::memory_order_acquire);
   config.tuningFrequency = shared.tuningFrequency.load(std::memory_order_acquire);
   config.stretchTuning = shared.stretchTuning.load(std::memory_order_acquire);
   return config;
@@ -76,10 +104,8 @@ Config snapshot(Shared& shared) {
 
 bool sameSynthConfig(const Config& a, const Config& b) {
   return a.generation == b.generation && a.polyphony == b.polyphony &&
-         a.sampleQuality == b.sampleQuality &&
-         a.oscillatorQuality == b.oscillatorQuality &&
-         a.tuningFrequency == b.tuningFrequency &&
-         a.stretchTuning == b.stretchTuning;
+         a.sampleQuality == b.sampleQuality && a.oscillatorQuality == b.oscillatorQuality &&
+         a.tuningFrequency == b.tuningFrequency && a.stretchTuning == b.stretchTuning;
 }
 
 // The longest amplitude release of an instrument at full velocity, in
@@ -108,20 +134,23 @@ std::string listOf(const std::string& prefix, const char* one, const char* many,
   return text;
 }
 
-// What a load could not read, e.g. "sfizz could not read 2 samples: a.wav,
-// b.wav"; empty when it read everything.
 // A size for a message, e.g. "32 KB" or "1.5 MB".
 std::string sizeText(uint64_t bytes) {
+  constexpr uint64_t kKilobyte = 1024;
+  constexpr uint64_t kMegabyte = kKilobyte * kKilobyte;
   char text[32];
-  if (bytes < (1u << 20)) {
+  if (bytes < kMegabyte) {
     std::snprintf(text, sizeof(text), "%llu KB",
-                  static_cast<unsigned long long>((bytes + 1023) / 1024));
+                  static_cast<unsigned long long>((bytes + kKilobyte - 1) / kKilobyte));
   } else {
-    std::snprintf(text, sizeof(text), "%.1f MB", static_cast<double>(bytes) / (1 << 20));
+    std::snprintf(text, sizeof(text), "%.1f MB",
+                  static_cast<double>(bytes) / static_cast<double>(kMegabyte));
   }
   return text;
 }
 
+// What a load could not read, e.g. "sfizz could not read 2 samples: a.wav,
+// b.wav"; empty when it read everything.
 std::string missingOf(const sfz::Synth& synth) {
   return listOf("sfizz could not read", "sample", "samples", synth.getMissingSamples());
 }
@@ -130,10 +159,45 @@ std::string missingOf(const sfz::Synth& synth) {
 // and the effects it does not know, which pass the signal through.
 std::string notesOf(const sfz::Synth& synth) {
   std::string text = missingOf(synth);
-  const std::string effects = listOf("sfizz does not know", "effect type",
-                                     "effect types", synth.getUnsupportedEffects());
+  const std::string effects = listOf("sfizz does not know", "effect type", "effect types",
+                                     synth.getUnsupportedEffects());
   if (!effects.empty()) text += (text.empty() ? "" : "; ") + effects;
   return text;
+}
+
+// Loads what `source` names into `synth`, the Scala tuning last; false with
+// `what` naming the part that failed.
+bool loadSource(sfz::Synth& synth, const Source& source, std::string& what) {
+  bool loaded = true;
+  switch (source.kind) {
+    case Source::Kind::file:
+      what = source.file;
+      loaded = synth.loadSfzFile(source.file);
+      break;
+    case Source::Kind::text:
+      what = source.virtualPath;
+      loaded = synth.loadSfzString(source.virtualPath, source.text);
+      break;
+    case Source::Kind::none:
+      break;
+  }
+  if (loaded && !source.scalaFile.empty()) {
+    what = source.scalaFile;
+    loaded = synth.loadScalaFile(source.scalaFile);
+  } else if (loaded && !source.scalaText.empty()) {
+    what = "the Scala text";
+    loaded = synth.loadScalaString(source.scalaText);
+  }
+  return loaded;
+}
+
+// Why a load failed: what sfizz could not load and the first error of its
+// parser.
+std::string failureOf(const sfz::Synth& synth, const std::string& what) {
+  std::string message = "sfizz could not load " + what;
+  const std::vector<std::string>& errors = synth.getParseErrors();
+  if (!errors.empty()) message += ": " + errors.front();
+  return message;
 }
 
 // ............................................................................
@@ -163,6 +227,30 @@ bool stopped(const LoadJob& job) {
   return job.load > 0 && shared.host->load_cancelled(shared.host->host, job.load);
 }
 
+// Hands a loaded synth to the audio thread unless a newer load or the
+// node's end came first; false then, and the synth goes. A prepare or a
+// parameter since the configuration reaches the synth here, as it does not
+// render yet. Nothing changes before the last step that may throw.
+bool handOver(const LoadJob& job, std::unique_ptr<sfz::Synth> synth, Source source,
+              float release, const Config& config) {
+  Shared& shared = *job.shared;
+  sfz::Synth* previous = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    if (shared.destroyed || shared.serial.load(std::memory_order_acquire) != job.serial) {
+      return false;
+    }
+    const Config now = snapshot(shared);
+    if (!sameSynthConfig(now, config)) configure(*synth, now);
+    shared.built = now;
+    shared.builtSource = std::move(source);
+    shared.tailSeconds = release;
+    previous = shared.ready.exchange(synth.release(), std::memory_order_acq_rel);
+  }
+  delete previous;  // a synth no block adopted
+  return true;
+}
+
 // Fills a standby synth with the instrument the node names now and hands it
 // to the audio thread; the node plays the old one meanwhile (decision 3 of
 // the plan review of ticket 25).
@@ -177,11 +265,7 @@ void runLoad(const LoadJob& job) {
     // A reload builds again what plays, not what a failed load named.
     source = job.load > 0 ? shared.source : shared.builtSource;
   }
-  std::unique_ptr<sfz::Synth> synth(new (std::nothrow) sfz::Synth());
-  if (!synth) {
-    endLoad(job, AUD_ERROR_OUT_OF_MEMORY, nullptr);
-    return;
-  }
+  std::unique_ptr<sfz::Synth> synth(new sfz::Synth());
   configure(*synth, config);
   sfz::FilePool& pool = synth->getResources().getFilePool();
   pool.setHost(fileHostOf(host));
@@ -190,28 +274,8 @@ void runLoad(const LoadJob& job) {
     if (job.load > 0) host->load_progress(host->host, job.load, progress);
     return true;
   });
-
-  bool loaded = true;
   std::string what;
-  switch (source.kind) {
-    case Source::Kind::file:
-      what = source.file;
-      loaded = synth->loadSfzFile(source.file);
-      break;
-    case Source::Kind::text:
-      what = source.virtualPath;
-      loaded = synth->loadSfzString(source.virtualPath, source.text);
-      break;
-    case Source::Kind::none:
-      break;
-  }
-  if (loaded && !source.scalaFile.empty()) {
-    what = source.scalaFile;
-    loaded = synth->loadScalaFile(source.scalaFile);
-  } else if (loaded && !source.scalaText.empty()) {
-    what = "the Scala text";
-    loaded = synth->loadScalaString(source.scalaText);
-  }
+  const bool loaded = loadSource(*synth, source, what);
   const bool cancelled = pool.loadCancelled() || stopped(job);
   pool.setLoadObserver(nullptr);
   if (cancelled) {
@@ -219,10 +283,7 @@ void runLoad(const LoadJob& job) {
     return;
   }
   if (!loaded) {
-    std::string message = "sfizz could not load " + what;
-    const std::vector<std::string>& errors = synth->getParseErrors();
-    if (!errors.empty()) message += ": " + errors.front();
-    endLoad(job, AUD_ERROR_FAILED, message.c_str());
+    endLoad(job, AUD_ERROR_FAILED, failureOf(*synth, what).c_str());
     return;
   }
   // sfizz drops the regions whose samples it cannot read: without a region
@@ -234,75 +295,83 @@ void runLoad(const LoadJob& job) {
   }
   // The heads an instrument pins stay in the store while it plays; one whose
   // heads alone exceed the sample cache budget is refused.
-  const uint64_t pinned = synth->getResources().getFilePool().pinnedBytes();
+  const uint64_t pinned = pool.pinnedBytes();
   const uint64_t budget = host->cache_budget(host->host);
   if (pinned > budget) {
     const std::string message = "the samples of the instrument pin " + sizeText(pinned) +
-                                ", more than the sample cache budget of " +
-                                sizeText(budget);
+                                ", more than the sample cache budget of " + sizeText(budget);
     endLoad(job, AUD_ERROR_CAPACITY, message.c_str());
     return;
   }
   const float release = releaseOf(*synth);
   const std::string notes = notesOf(*synth);
-
-  sfz::Synth* previous = nullptr;
-  bool handed = false;
-  {
-    std::lock_guard<std::mutex> lock(shared.mutex);
-    if (!shared.destroyed &&
-        shared.serial.load(std::memory_order_acquire) == job.serial) {
-      // A prepare or a parameter since the configuration: the synth does
-      // not render yet, so it takes them now.
-      const Config now = snapshot(shared);
-      if (!sameSynthConfig(now, config)) configure(*synth, now);
-      shared.built = now;
-      shared.builtSource = source;
-      shared.tailSeconds = release;
-      previous = shared.ready.exchange(synth.release(), std::memory_order_acq_rel);
-      handed = true;
-    }
-  }
-  delete previous;  // a synth no block adopted
-  if (!handed) {
+  if (!handOver(job, std::move(synth), std::move(source), release, config)) {
     endLoad(job, AUD_ERROR_CANCELLED, nullptr);
-  } else {
-    endLoad(job, AUD_OK, notes.empty() ? nullptr : notes.c_str());
+    return;
+  }
+  endLoad(job, AUD_OK, notes.empty() ? nullptr : notes.c_str());
+}
+
+// Runs a load. An exception, which means memory ran out, ends the load
+// instead of the process: it would cross the C ABI of the worker.
+void runLoadSafely(const LoadJob& job) noexcept {
+  try {
+    runLoad(job);
+  } catch (const std::bad_alloc&) {
+    endLoad(job, AUD_ERROR_OUT_OF_MEMORY, nullptr);
+  } catch (const std::exception& error) {
+    endLoad(job, AUD_ERROR_FAILED, error.what());
   }
 }
 
-void loadTask(void* user) {
-  std::unique_ptr<LoadJob> job(static_cast<LoadJob*>(user));
-  runLoad(*job);
+// [control, worker] Counts a load that starts and gives it the newest
+// serial; under the mutex, so that a reload and a load that starts at the
+// same time agree on which one is newer.
+uint64_t beginLoad(Shared& shared) {
+  shared.loads += 1;
+  return shared.serial.fetch_add(1, std::memory_order_acq_rel) + 1;
 }
 
-void finishLoad(const std::shared_ptr<Shared>& shared);
+// [control, worker] Counts a load that ended; true when it was the last one
+// and a reload waits for it.
+bool endLoads(Shared& shared) {
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  shared.loads -= 1;
+  if (shared.loads > 0 || !shared.reloadDeferred) return false;
+  shared.reloadDeferred = false;
+  return true;
+}
+
+// Whether a reload runs now, counted as a load with the newest serial. It
+// stands back while a load runs, which takes the change when it hands its
+// synth over, and the last load to end runs it; it is not needed when what
+// was built has the configuration already.
+bool beginReload(LoadJob& job) {
+  Shared& shared = *job.shared;
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  if (shared.loads > 0) {
+    shared.reloadDeferred = true;
+    return false;
+  }
+  shared.reloadDeferred = false;
+  if (shared.destroyed || shared.builtSource.kind == Source::Kind::none ||
+      sameSynthConfig(snapshot(shared), shared.built)) {
+    return false;
+  }
+  job.serial = beginLoad(shared);
+  return true;
+}
 
 // A change of the polyphony or the tuning loads the instrument again: sfizz
 // sets its voices only while it does not render, and its tuning tables
-// allocate. A load that runs takes the change when it hands its synth over,
-// so the reload stands back then and the last load to end runs it. The
-// flags are sequentially consistent: either the reload sees the load, or
-// the load sees the deferred reload.
+// allocate. Runs reloads until none waits.
 void reloadNow(const std::shared_ptr<Shared>& shared) {
-  shared->reloadDeferred.store(true);
-  if (shared->loads.load() > 0) return;
-  if (!shared->reloadDeferred.exchange(false)) return;
-  {
-    std::lock_guard<std::mutex> lock(shared->mutex);
-    if (shared->destroyed || shared->builtSource.kind == Source::Kind::none) return;
-    if (sameSynthConfig(snapshot(*shared), shared->built)) return;
-  }
   LoadJob job;
   job.shared = shared;
-  job.serial = shared->serial.fetch_add(1, std::memory_order_acq_rel) + 1;
-  shared->loads.fetch_add(1);
-  runLoad(job);
-  finishLoad(shared);
-}
-
-void finishLoad(const std::shared_ptr<Shared>& shared) {
-  if (shared->loads.fetch_sub(1) == 1 && shared->reloadDeferred.load()) reloadNow(shared);
+  while (beginReload(job)) {
+    runLoadSafely(job);
+    if (!endLoads(*shared)) return;
+  }
 }
 
 void reloadTask(void* user) {
@@ -319,17 +388,18 @@ void postReload(const std::shared_ptr<Shared>& shared, const AudHostApi* host) {
   Reload& reload = shared->reload;
   if (reload.posted.exchange(true, std::memory_order_acq_rel)) return;
   reload.keep = shared;
-  const AudTask task{sizeof(AudTask), 0, reloadTask, &reload};
-  if (host->post_task(host->host, &task) != AUD_OK) {
+  if (post(host, reloadTask, &reload) != AUD_OK) {
     reload.keep.reset();
     reload.posted.store(false, std::memory_order_release);
   }
 }
 
-void countedLoadTask(void* user) {
-  std::shared_ptr<Shared> shared = static_cast<LoadJob*>(user)->shared;
-  loadTask(user);
-  finishLoad(shared);
+void loadTask(void* user) {
+  std::unique_ptr<LoadJob> job(static_cast<LoadJob*>(user));
+  const std::shared_ptr<Shared> shared = job->shared;
+  runLoadSafely(*job);
+  job.reset();
+  if (endLoads(*shared)) reloadNow(shared);
 }
 
 // [control] Starts a load of what the node names now; returns its id.
@@ -344,19 +414,74 @@ int32_t startLoad(Node& node, const std::string& name) {
   }
   job->shared = node.shared;
   job->load = id;
-  job->serial = node.shared->serial.fetch_add(1, std::memory_order_acq_rel) + 1;
-  node.shared->loads.fetch_add(1, std::memory_order_acq_rel);
-  const AudTask task{sizeof(AudTask), 0, countedLoadTask, job};
-  const int32_t posted = host->post_task(host->host, &task);
+  {
+    std::lock_guard<std::mutex> lock(node.shared->mutex);
+    job->serial = beginLoad(*node.shared);
+  }
+  const int32_t posted = post(host, loadTask, job);
   if (posted != AUD_OK) {
-    if (node.shared->loads.fetch_sub(1) == 1 && node.shared->reloadDeferred.load()) {
-      postReload(node.shared, host);
-    }
+    if (endLoads(*node.shared)) postReload(node.shared, host);
     host->end_load(host->host, id, posted, "no worker thread took the load");
     delete job;
     return posted;
   }
   return id;
+}
+
+// ............................................................................
+// String settings on the control thread
+
+// What a string setting does: start a load with a name, or end with a
+// result code.
+struct Setting {
+  bool loads = false;
+  int32_t result = AUD_OK;
+  std::string name;
+};
+
+// Changes the source as a string setting says. Builds the new source aside
+// and commits it last, so that memory that runs out changes nothing.
+Setting changeSource(Shared& shared, uint32_t key, const char* value) {
+  const std::string text = value != nullptr ? value : "";
+  Setting setting;
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  Source source = shared.source;
+  switch (key) {
+    case AUD_SFZ_KEY_FILE:
+      source.kind = text.empty() ? Source::Kind::none : Source::Kind::file;
+      source.file = text;
+      setting.loads = true;
+      setting.name = text;
+      break;
+    case AUD_SFZ_KEY_VIRTUAL_PATH:
+      // The path the next text resolves its samples against: a text and
+      // its path come together, so the path starts no load of its own.
+      source.virtualPath = text.empty() ? Source().virtualPath : text;
+      break;
+    case AUD_SFZ_KEY_TEXT:
+      source.kind = text.empty() ? Source::Kind::none : Source::Kind::text;
+      source.text = text;
+      setting.loads = true;
+      setting.name = source.virtualPath;
+      break;
+    case AUD_SFZ_KEY_SCALA_FILE:
+      source.scalaFile = text;
+      source.scalaText.clear();
+      setting.loads = source.kind != Source::Kind::none;
+      setting.name = text;
+      break;
+    case AUD_SFZ_KEY_SCALA_TEXT:
+      source.scalaText = text;
+      source.scalaFile.clear();
+      setting.loads = source.kind != Source::Kind::none;
+      setting.name = "scala";
+      break;
+    default:
+      setting.result = AUD_ERROR_INVALID_ARGUMENT;
+      return setting;
+  }
+  shared.source = std::move(source);
+  return setting;
 }
 
 // ............................................................................
@@ -366,9 +491,7 @@ int32_t startLoad(Node& node, const std::string& name) {
 // queue refuses waits for the next block.
 void postRetired(Node& node) {
   for (sfz::Synth*& synth : node.retired) {
-    if (synth == nullptr) continue;
-    const AudTask task{sizeof(AudTask), 0, deleteSynth, synth};
-    if (node.host->post_task(node.host->host, &task) == AUD_OK) synth = nullptr;
+    if (synth != nullptr && post(node.host, deleteSynth, synth) == AUD_OK) synth = nullptr;
   }
 }
 
@@ -394,10 +517,9 @@ void retire(Node& node, sfz::Synth* synth) {
 // The settings a synth takes while it renders, without allocating.
 void applyRealtimeParams(const Node& node, sfz::Synth& synth) {
   synth.setSampleQuality(sfz::Synth::ProcessLive,
-                         static_cast<int>(node.params[AUD_SFZ_PARAM_SAMPLE_QUALITY]));
-  synth.setOscillatorQuality(
-      sfz::Synth::ProcessLive,
-      static_cast<int>(node.params[AUD_SFZ_PARAM_OSCILLATOR_QUALITY]));
+                         stepOf(node.params[AUD_SFZ_PARAM_SAMPLE_QUALITY]));
+  synth.setOscillatorQuality(sfz::Synth::ProcessLive,
+                             stepOf(node.params[AUD_SFZ_PARAM_OSCILLATOR_QUALITY]));
 }
 
 // Adopts a synth a load handed over: the one that played fades out, the
@@ -424,23 +546,220 @@ void adopt(Node& node, sfz::Synth* next) {
   node.playing = -1;
 }
 
-void setCc(Node& node, uint32_t cc, float value) {
-  if (cc >= kNumCcs) return;
-  node.cc[cc] = value;
-  node.ccSet[cc] = true;
+// A synth a load handed over, adopted at the block start unless a fade
+// runs, which takes at most 5 ms.
+void adoptReady(Node& node) {
+  if (node.fading != nullptr || !hasFreeSlot(node)) return;
+  sfz::Synth* next = node.shared->ready.exchange(nullptr, std::memory_order_acq_rel);
+  if (next != nullptr) adopt(node, next);
 }
 
-float unit7(uint32_t value) { return static_cast<float>(value & 0x7f) / 127.0f; }
+// The synths render with sfizz's best quality while the engine renders
+// offline.
+void followFreewheeling(Node& node, const AudProcessContext* context) {
+  const bool offline = (context->flags & AUD_PROCESS_OFFLINE) != 0;
+  if (offline == node.freewheeling) return;
+  node.freewheeling = offline;
+  sfz::Synth* synths[2] = {node.active, node.fading};
+  for (sfz::Synth* synth : synths) {
+    if (synth == nullptr) continue;
+    if (offline) {
+      synth->enableFreeWheeling();
+    } else {
+      synth->disableFreeWheeling();
+    }
+  }
+}
 
-// A UMP of the MIDI 1.0 or 2.0 channel voice protocol. sfizz knows one
-// per-note controller, poly pressure; the other per-note messages of MIDI
-// 2.0 are counted and reported (decision 6 of the plan review).
+void setGainTarget(Node& node, float db, uint32_t rampFrames) {
+  node.gainTarget = gainOf(db);
+  node.gainRemaining = std::max<uint32_t>(1, rampFrames);
+  node.gainStep = (node.gainTarget - node.gain) / static_cast<float>(node.gainRemaining);
+}
+
+// A parameter within its range; NaN counts as its minimum.
+float clampParam(uint32_t index, float value) {
+  return std::min(kParams[index].max_value, std::max(kParams[index].min_value, value));
+}
+
+// Stores a setting a synth takes only when it is built; a change loads the
+// instrument again on a worker.
+template <typename T>
+void reloadIfChanged(Node& node, std::atomic<T>& setting, T value) {
+  if (setting.exchange(value, std::memory_order_acq_rel) != value) {
+    postReload(node.shared, node.host);
+  }
+}
+
+// A parameter, from set_param or from an event of the block.
+void applyParam(Node& node, uint32_t index, float value, uint32_t rampFrames) {
+  if (index >= AUD_SFZ_NUM_PARAMS) return;
+  value = clampParam(index, value);
+  node.params[index] = value;
+  Shared& shared = *node.shared;
+  switch (index) {
+    case AUD_SFZ_PARAM_VOLUME:
+      setGainTarget(node, value, rampFrames);
+      return;
+    case AUD_SFZ_PARAM_POLYPHONY:
+      reloadIfChanged(node, shared.polyphony, stepOf(value));
+      return;
+    case AUD_SFZ_PARAM_TUNING_FREQUENCY:
+      reloadIfChanged(node, shared.tuningFrequency, value);
+      return;
+    case AUD_SFZ_PARAM_STRETCH_TUNING:
+      reloadIfChanged(node, shared.stretchTuning, value);
+      return;
+    case AUD_SFZ_PARAM_SAMPLE_QUALITY:
+      shared.sampleQuality.store(stepOf(value), std::memory_order_release);
+      break;
+    case AUD_SFZ_PARAM_OSCILLATOR_QUALITY:
+      shared.oscillatorQuality.store(stepOf(value), std::memory_order_release);
+      break;
+    default:
+      return;
+  }
+  if (node.active != nullptr) applyRealtimeParams(node, *node.active);
+  if (node.fading != nullptr) applyRealtimeParams(node, *node.fading);
+}
+
+// A controller an event sets, which a new synth takes over: a CC, the
+// pitch bend, the channel pressure or the program.
+struct Controller {
+  enum class Kind { none, cc, pitchBend, pressure, program };
+  Kind kind = Kind::none;
+  uint32_t number = 0;  // the CC or the program
+  float value = 0;      // the CC 0 to 1, the bend -1 to 1, the pressure 0 to 1
+};
+
+float unit7(uint32_t value) { return static_cast<float>(value & kDataMask) / kMax7Bit; }
+
+// The controller of a UMP of the MIDI 1.0 or 2.0 channel voice protocol.
+Controller controllerOfUmp(const AudEvent& event) {
+  const uint32_t w0 = event.words[0];
+  const uint32_t w1 = event.words[1];
+  const uint32_t type = aud_ump_message_type(w0);
+  const bool midi2 = type == AUD_UMP_TYPE_MIDI2_CHANNEL_VOICE;
+  Controller controller;
+  if (!midi2 && type != AUD_UMP_TYPE_MIDI1_CHANNEL_VOICE) return controller;
+  switch (aud_ump_status(w0)) {
+    case AUD_UMP_STATUS_CONTROL_CHANGE:
+      controller.kind = Controller::Kind::cc;
+      controller.number = aud_ump_note(w0);
+      controller.value = midi2 ? aud_ump_unit_value(w1) : unit7(aud_ump_midi1_data2(w0));
+      break;
+    case AUD_UMP_STATUS_PROGRAM_CHANGE:
+      controller.kind = Controller::Kind::program;
+      controller.number =
+          midi2 ? (w1 >> kMidi2ProgramShift) & kDataMask : aud_ump_midi1_data1(w0) & kDataMask;
+      break;
+    case AUD_UMP_STATUS_CHANNEL_PRESSURE:
+      controller.kind = Controller::Kind::pressure;
+      controller.value = midi2 ? aud_ump_unit_value(w1) : unit7(aud_ump_midi1_data1(w0));
+      break;
+    case AUD_UMP_STATUS_PITCH_BEND:
+      controller.kind = Controller::Kind::pitchBend;
+      if (midi2) {
+        controller.value = 2.0f * aud_ump_unit_value(w1) - 1.0f;
+      } else {
+        const int bits = static_cast<int>((aud_ump_midi1_data2(w0) & kDataMask) << 7 |
+                                          (aud_ump_midi1_data1(w0) & kDataMask));
+        controller.value =
+            static_cast<float>(bits - kPitchBendCentre) / static_cast<float>(kPitchBendCentre);
+      }
+      break;
+    default:
+      break;
+  }
+  return controller;
+}
+
+// The CC of a numeric control: the control id names a CC of sfizz, 0 to
+// 511; an integer argument counts in steps of 1/127.
+Controller controllerOfControl(const AudEvent& event) {
+  Controller controller;
+  if (event.words[0] >= kNumCcs) return controller;
+  float value;
+  switch (event.words[1]) {
+    case AUD_ARG_FLOAT:
+      std::memcpy(&value, &event.words[2], sizeof(float));
+      break;
+    case AUD_ARG_INT32:
+      value = static_cast<float>(static_cast<int32_t>(event.words[2])) / kMax7Bit;
+      break;
+    case AUD_ARG_TRUE:
+      value = 1.0f;
+      break;
+    case AUD_ARG_FALSE:
+      value = 0.0f;
+      break;
+    default:
+      return controller;
+  }
+  controller.kind = Controller::Kind::cc;
+  controller.number = event.words[0];
+  controller.value = std::min(1.0f, std::max(0.0f, value));
+  return controller;
+}
+
+Controller controllerOf(const AudEvent& event) {
+  if (event.type == AUD_EVENT_UMP) return controllerOfUmp(event);
+  if (event.type == AUD_EVENT_CONTROL) return controllerOfControl(event);
+  return Controller{};
+}
+
+// Remembers a controller for the synth that comes next.
+void remember(Node& node, const Controller& controller) {
+  switch (controller.kind) {
+    case Controller::Kind::cc:
+      node.cc[controller.number] = controller.value;
+      node.ccSet[controller.number] = true;
+      break;
+    case Controller::Kind::pitchBend:
+      node.pitchBend = controller.value;
+      node.pitchBendSet = true;
+      break;
+    case Controller::Kind::pressure:
+      node.aftertouch = controller.value;
+      node.aftertouchSet = true;
+      break;
+    case Controller::Kind::program:
+      node.program = static_cast<int>(controller.number);
+      break;
+    case Controller::Kind::none:
+      break;
+  }
+}
+
+// Sends a controller to the synth that plays.
+void send(sfz::Synth& synth, int delay, const Controller& controller) {
+  switch (controller.kind) {
+    case Controller::Kind::cc:
+      synth.hdcc(delay, static_cast<int>(controller.number), controller.value);
+      break;
+    case Controller::Kind::pitchBend:
+      synth.hdPitchWheel(delay, controller.value);
+      break;
+    case Controller::Kind::pressure:
+      synth.hdChannelAftertouch(delay, controller.value);
+      break;
+    case Controller::Kind::program:
+      synth.programChange(delay, static_cast<int>(controller.number));
+      break;
+    case Controller::Kind::none:
+      break;
+  }
+}
+
+// The notes and the poly pressure of a UMP of the MIDI 1.0 or 2.0 channel
+// voice protocol. sfizz knows one per-note controller, poly pressure; the
+// other per-note messages of MIDI 2.0 are counted and reported (decision 6
+// of the plan review).
 void dispatchUmp(Node& node, sfz::Synth& synth, const AudEvent& event) {
   const uint32_t w0 = event.words[0];
   const uint32_t w1 = event.words[1];
   const uint32_t type = aud_ump_message_type(w0);
-  if (type != AUD_UMP_TYPE_MIDI1_CHANNEL_VOICE &&
-      type != AUD_UMP_TYPE_MIDI2_CHANNEL_VOICE) {
+  if (type != AUD_UMP_TYPE_MIDI1_CHANNEL_VOICE && type != AUD_UMP_TYPE_MIDI2_CHANNEL_VOICE) {
     return;
   }
   const bool midi2 = type == AUD_UMP_TYPE_MIDI2_CHANNEL_VOICE;
@@ -459,79 +778,14 @@ void dispatchUmp(Node& node, sfz::Synth& synth, const AudEvent& event) {
       break;
     case AUD_UMP_STATUS_POLY_PRESSURE:
       synth.hdPolyAftertouch(delay, note,
-                             midi2 ? aud_ump_unit_value(w1)
-                                   : unit7(aud_ump_midi1_data2(w0)));
+                             midi2 ? aud_ump_unit_value(w1) : unit7(aud_ump_midi1_data2(w0)));
       break;
-    case AUD_UMP_STATUS_CONTROL_CHANGE: {
-      const uint32_t cc = aud_ump_note(w0);
-      const float value =
-          midi2 ? aud_ump_unit_value(w1) : unit7(aud_ump_midi1_data2(w0));
-      setCc(node, cc, value);
-      synth.hdcc(delay, static_cast<int>(cc), value);
-      break;
-    }
-    case AUD_UMP_STATUS_PROGRAM_CHANGE: {
-      const int program = static_cast<int>(
-          midi2 ? (w1 >> 24) & 0x7f : aud_ump_midi1_data1(w0) & 0x7f);
-      node.program = program;
-      synth.programChange(delay, program);
-      break;
-    }
-    case AUD_UMP_STATUS_CHANNEL_PRESSURE: {
-      const float value =
-          midi2 ? aud_ump_unit_value(w1) : unit7(aud_ump_midi1_data1(w0));
-      node.aftertouch = value;
-      node.aftertouchSet = true;
-      synth.hdChannelAftertouch(delay, value);
-      break;
-    }
-    case AUD_UMP_STATUS_PITCH_BEND: {
-      float value;
-      if (midi2) {
-        value = 2.0f * aud_ump_unit_value(w1) - 1.0f;
-      } else {
-        const int bits = static_cast<int>((aud_ump_midi1_data2(w0) & 0x7f) << 7 |
-                                          (aud_ump_midi1_data1(w0) & 0x7f));
-        value = static_cast<float>(bits - 8192) / 8192.0f;
-      }
-      node.pitchBend = value;
-      node.pitchBendSet = true;
-      synth.hdPitchWheel(delay, value);
-      break;
-    }
     default:
       // Per-note controllers, per-note pitch bend, per-note management and
       // the registered controllers of MIDI 2.0: sfizz has no counterpart.
       if (midi2) node.unsupported += 1;
       break;
   }
-}
-
-// A numeric control: the control id names a CC of sfizz, 0 to 511.
-void dispatchControl(Node& node, sfz::Synth& synth, const AudEvent& event) {
-  const uint32_t cc = event.words[0];
-  if (cc >= kNumCcs) return;
-  float value;
-  switch (event.words[1]) {
-    case AUD_ARG_FLOAT: {
-      std::memcpy(&value, &event.words[2], sizeof(float));
-      break;
-    }
-    case AUD_ARG_INT32:
-      value = static_cast<float>(static_cast<int32_t>(event.words[2])) / 127.0f;
-      break;
-    case AUD_ARG_TRUE:
-      value = 1.0f;
-      break;
-    case AUD_ARG_FALSE:
-      value = 0.0f;
-      break;
-    default:
-      return;
-  }
-  value = std::min(1.0f, std::max(0.0f, value));
-  setCc(node, cc, value);
-  synth.hdcc(static_cast<int>(event.sample_offset), static_cast<int>(cc), value);
 }
 
 // A message of the engine (osc-001) reaches sfizz's message API; sfizz
@@ -542,8 +796,7 @@ void dispatchControl(Node& node, sfz::Synth& synth, const AudEvent& event) {
 void dispatchMessage(Node& node, sfz::Synth& synth, const AudEvent& event) {
   const AudMessage* message = aud_event_message(&event);
   if (message == nullptr || message->path == nullptr) return;
-  constexpr uint32_t kMax = 4;
-  if (message->num_args > kMax) {
+  if (message->num_args > kMaxMessageArgs) {
     node.unsupported += 1;
     return;
   }
@@ -554,8 +807,8 @@ void dispatchMessage(Node& node, sfz::Synth& synth, const AudEvent& event) {
       return;
     }
   }
-  char sig[kMax + 1];
-  sfizz_arg_t args[kMax];
+  char sig[kMaxMessageArgs + 1];
+  sfizz_arg_t args[kMaxMessageArgs];
   const uint32_t count = message->num_args;
   for (uint32_t i = 0; i < count; ++i) {
     const AudMessageArg& arg = message->args[i];
@@ -586,19 +839,51 @@ void dispatchMessage(Node& node, sfz::Synth& synth, const AudEvent& event) {
   }
   sig[count] = '\0';
   synth.dispatchMessage(*static_cast<sfz::Client*>(node.client),
-                        static_cast<int>(event.sample_offset), message->path,
-                        sig, args);
+                        static_cast<int>(event.sample_offset), message->path, sig, args);
+}
+
+// An event for the synth that plays: a controller, a note, a message.
+void dispatch(Node& node, sfz::Synth& synth, const AudEvent& event,
+              const Controller& controller) {
+  if (controller.kind != Controller::Kind::none) {
+    send(synth, static_cast<int>(event.sample_offset), controller);
+  } else if (event.type == AUD_EVENT_UMP) {
+    dispatchUmp(node, synth, event);
+  } else if (event.type == AUD_EVENT_MESSAGE) {
+    dispatchMessage(node, synth, event);
+  }
+}
+
+// The events of the block in their order. Every controller is remembered
+// for the synth that comes next, also before the first one; without a
+// synth, nothing answers a message, which counts as unsupported. The
+// volume ramps in applyVolume.
+void dispatchEvents(Node& node, const AudProcessContext* context) {
+  for (uint32_t i = 0; i < context->num_events; ++i) {
+    const AudEvent& event = context->events[i];
+    if (event.type == AUD_EVENT_PARAM) {
+      if (event.words[0] != AUD_SFZ_PARAM_VOLUME) {
+        applyParam(node, event.words[0], aud_event_param_value(&event), event.words[2]);
+      }
+      continue;
+    }
+    const Controller controller = controllerOf(event);
+    remember(node, controller);
+    if (node.active != nullptr) {
+      dispatch(node, *node.active, event, controller);
+    } else if (event.type == AUD_EVENT_MESSAGE) {
+      node.unsupported += 1;
+    }
+  }
 }
 
 // sfizz's answer to a message, on the audio thread: it leaves through the
 // engine's reply ring.
-void onReceive(void* data, int, const char* path, const char* sig,
-               const sfizz_arg_t* args) {
+void onReceive(void* data, int, const char* path, const char* sig, const sfizz_arg_t* args) {
   Node& node = *static_cast<Node*>(data);
-  constexpr uint32_t kMax = 16;
-  AudMessageArg out[kMax];
+  AudMessageArg out[kMaxReplyArgs];
   uint32_t count = 0;
-  for (; sig != nullptr && sig[count] != '\0' && count < kMax; ++count) {
+  for (; sig != nullptr && sig[count] != '\0' && count < kMaxReplyArgs; ++count) {
     AudMessageArg& arg = out[count];
     arg = AudMessageArg{};
     arg.struct_size = sizeof(AudMessageArg);
@@ -627,7 +912,7 @@ void onReceive(void* data, int, const char* path, const char* sig,
       case 'm':
         // A MIDI message of four bytes travels as a blob.
         arg.type = AUD_ARG_BLOB;
-        arg.size = 4;
+        arg.size = kMidiMessageBytes;
         arg.value.b = value.m;
         break;
       case 'T':
@@ -646,10 +931,8 @@ void onReceive(void* data, int, const char* path, const char* sig,
 
 // Sends what changed of the block's transport to sfizz: tempo, time
 // signature, playing state and position, for its tempo-synced modulation.
-void sendTransport(Node& node, sfz::Synth& synth,
-                   const AudTransportSnapshot* transport) {
-  if (transport == nullptr || transport->num_segments == 0 ||
-      transport->segments == nullptr) {
+void sendTransport(Node& node, sfz::Synth& synth, const AudTransportSnapshot* transport) {
+  if (transport == nullptr || transport->num_segments == 0 || transport->segments == nullptr) {
     return;
   }
   const AudTransportSegment& segment = transport->segments[0];
@@ -657,14 +940,12 @@ void sendTransport(Node& node, sfz::Synth& synth,
     node.tempo = segment.tempo;
     synth.bpmTempo(0, static_cast<float>(segment.tempo));
   }
-  if (segment.time_signature_numerator > 0 &&
-      segment.time_signature_denominator > 0 &&
+  if (segment.time_signature_numerator > 0 && segment.time_signature_denominator > 0 &&
       (segment.time_signature_numerator != node.numerator ||
        segment.time_signature_denominator != node.denominator)) {
     node.numerator = segment.time_signature_numerator;
     node.denominator = segment.time_signature_denominator;
-    synth.timeSignature(0, static_cast<int>(node.numerator),
-                        static_cast<int>(node.denominator));
+    synth.timeSignature(0, static_cast<int>(node.numerator), static_cast<int>(node.denominator));
   }
   const int playing = (segment.flags & AUD_SEGMENT_PLAYING) ? 1 : 0;
   if (playing != node.playing) {
@@ -672,65 +953,12 @@ void sendTransport(Node& node, sfz::Synth& synth,
     synth.playbackState(0, playing);
   }
   if (playing != 0 && node.numerator > 0 && node.denominator > 0) {
-    const double beats = static_cast<double>(segment.beat) /
-                         static_cast<double>(AUD_BEAT_FACTOR);
-    const double perBar = node.numerator * 4.0 / node.denominator;
+    constexpr double kQuartersPerWhole = 4.0;
+    const double beats = static_cast<double>(segment.beat) / static_cast<double>(AUD_BEAT_FACTOR);
+    const double perBar = node.numerator * kQuartersPerWhole / node.denominator;
     const double bar = std::floor(beats / perBar);
     synth.timePosition(0, static_cast<int>(bar), beats - bar * perBar);
   }
-}
-
-void setGainTarget(Node& node, float db, uint32_t rampFrames) {
-  node.gainTarget = gainOf(db);
-  node.gainRemaining = std::max<uint32_t>(1, rampFrames);
-  node.gainStep = (node.gainTarget - node.gain) / static_cast<float>(node.gainRemaining);
-}
-
-float clampParam(uint32_t index, float value) {
-  static const float kMin[AUD_SFZ_NUM_PARAMS] = {-60, 1, 0, 0, 400, 0};
-  static const float kMax[AUD_SFZ_NUM_PARAMS] = {6, 256, 10, 3, 480, 1};
-  return std::min(kMax[index], std::max(kMin[index], value));
-}
-
-// A parameter, from set_param or from an event of the block.
-void applyParam(Node& node, uint32_t index, float value, uint32_t rampFrames) {
-  if (index >= AUD_SFZ_NUM_PARAMS) return;
-  value = clampParam(index, value);
-  node.params[index] = value;
-  Shared& shared = *node.shared;
-  switch (index) {
-    case AUD_SFZ_PARAM_VOLUME:
-      setGainTarget(node, value, rampFrames);
-      return;
-    case AUD_SFZ_PARAM_POLYPHONY: {
-      const int voices = static_cast<int>(std::lround(value));
-      if (shared.polyphony.exchange(voices, std::memory_order_acq_rel) != voices) {
-        postReload(node.shared, node.host);
-      }
-      return;
-    }
-    case AUD_SFZ_PARAM_TUNING_FREQUENCY:
-      if (shared.tuningFrequency.exchange(value, std::memory_order_acq_rel) != value) {
-        postReload(node.shared, node.host);
-      }
-      return;
-    case AUD_SFZ_PARAM_STRETCH_TUNING:
-      if (shared.stretchTuning.exchange(value, std::memory_order_acq_rel) != value) {
-        postReload(node.shared, node.host);
-      }
-      return;
-    case AUD_SFZ_PARAM_SAMPLE_QUALITY:
-      shared.sampleQuality.store(static_cast<int>(value), std::memory_order_release);
-      break;
-    case AUD_SFZ_PARAM_OSCILLATOR_QUALITY:
-      shared.oscillatorQuality.store(static_cast<int>(value),
-                                     std::memory_order_release);
-      break;
-    default:
-      return;
-  }
-  if (node.active != nullptr) applyRealtimeParams(node, *node.active);
-  if (node.fading != nullptr) applyRealtimeParams(node, *node.fading);
 }
 
 void clearBus(const AudAudioBus& bus, uint32_t frames) {
@@ -758,8 +986,8 @@ void render(Node& node, const AudProcessContext* context) {
       for (uint32_t i = 0; i < frames; ++i) {
         const uint32_t position = done + i;
         if (position >= node.fadeFrames) break;
-        const float gain = 1.0f - static_cast<float>(position) /
-                                      static_cast<float>(node.fadeFrames);
+        const float gain =
+            1.0f - static_cast<float>(position) / static_cast<float>(node.fadeFrames);
         target[i] += source[i] * gain;
       }
     }
@@ -809,7 +1037,8 @@ void applyVolume(Node& node, const AudProcessContext* context) {
 }
 
 // The diagnostics of the block (lifecycle-001): voices that outran their
-// stream, streams no worker took, per-note messages sfizz cannot play.
+// stream, streams no worker took, messages and per-note messages sfizz
+// cannot take.
 void report(Node& node) {
   const AudHostApi* host = node.host;
   sfz::Synth* synths[2] = {node.active, node.fading};
@@ -827,31 +1056,67 @@ void report(Node& node) {
   }
 }
 
+// ............................................................................
+// Creation
+
+// Whether a host offers what the node calls: the tasks, the loads and the
+// cache, and on the audio thread the reports and the messages.
+bool complete(const AudHostApi* host) {
+  return host != nullptr && host->struct_size >= sizeof(AudHostApi) &&
+         host->post_task != nullptr && host->begin_load != nullptr &&
+         host->load_progress != nullptr && host->end_load != nullptr &&
+         host->load_cancelled != nullptr && host->register_cache != nullptr &&
+         host->cache_changed != nullptr && host->cache_budget != nullptr &&
+         host->report != nullptr && host->emit_message != nullptr;
+}
+
+// Puts the store of the process under the engine's sample cache budget;
+// false, logged, when the engine takes no more caches.
+bool joinBudget(const AudHostApi* host) {
+  const int32_t result = host->register_cache(host->host, &kStoreVTable, &sfz::SampleStore::get());
+  if (result == AUD_OK) return true;
+  char message[96];
+  std::snprintf(message, sizeof(message),
+                "aud.sampler.sfz: the sample store cannot join the sample cache budget (%d)",
+                static_cast<int>(result));
+  logError(host, message);
+  return false;
+}
+
+// A node of `host`; throws when the memory is not there.
+Node* newNode(const AudHostApi* host) {
+  std::unique_ptr<Node> node(new Node());
+  node->host = host;
+  node->shared = std::make_shared<Shared>();
+  node->shared->host = host;
+  node->outputPointers.assign(sfz::config::maxChannels, nullptr);
+  auto* client = new sfz::Client(node.get());
+  client->setReceiveCallback(&onReceive);
+  node->client = client;
+  return node.release();
+}
+
 }  // namespace
+
+// ############################################################################
+// The node
+
+Node::Node() {
+  for (uint32_t i = 0; i < AUD_SFZ_NUM_PARAMS; ++i) params[i] = kParams[i].default_value;
+  gain = gainOf(params[AUD_SFZ_PARAM_VOLUME]);
+  gainTarget = gain;
+}
 
 // ############################################################################
 // The vtable
 
 void* create(const AudNodeDescriptor*, const AudHostApi* host) {
-  if (host == nullptr || host->struct_size < sizeof(AudHostApi) ||
-      host->post_task == nullptr || host->begin_load == nullptr) {
+  if (!complete(host) || !joinBudget(host)) return nullptr;
+  try {
+    return newNode(host);
+  } catch (const std::exception&) {
     return nullptr;
   }
-  auto* node = new (std::nothrow) Node();
-  if (node == nullptr) return nullptr;
-  node->host = host;
-  node->shared = std::make_shared<Shared>();
-  node->shared->host = host;
-  auto* client = new (std::nothrow) sfz::Client(node);
-  if (client == nullptr) {
-    delete node;
-    return nullptr;
-  }
-  client->setReceiveCallback(&onReceive);
-  node->client = client;
-  node->outputPointers.assign(sfz::config::maxChannels, nullptr);
-  host->register_cache(host->host, &kStoreVTable, &sfz::SampleStore::get());
-  return node;
 }
 
 void destroy(void* instance) {
@@ -873,13 +1138,24 @@ void destroy(void* instance) {
 
 int32_t prepare(void* instance, const AudPrepareInfo* info) {
   auto* node = static_cast<Node*>(instance);
-  if (info == nullptr || info->num_output_buses != 1 ||
-      info->output_channels == nullptr) {
+  if (info == nullptr || info->num_output_buses != 1 || info->output_channels == nullptr) {
     return AUD_ERROR_INVALID_ARGUMENT;
   }
   const uint32_t channels = info->output_channels[0];
   if (channels == 0 || channels % 2 != 0 || channels > sfz::config::maxChannels) {
     return AUD_ERROR_FORMAT;
+  }
+  // The block of the fading synth, allocated before anything changes.
+  std::vector<float> scratch;
+  std::vector<float*> scratchPointers;
+  try {
+    scratch.assign(static_cast<size_t>(channels) * info->max_frames, 0.0f);
+    scratchPointers.resize(channels);
+  } catch (const std::exception&) {
+    return AUD_ERROR_OUT_OF_MEMORY;
+  }
+  for (uint32_t c = 0; c < channels; ++c) {
+    scratchPointers[c] = scratch.data() + static_cast<size_t>(c) * info->max_frames;
   }
   Shared& shared = *node->shared;
   std::lock_guard<std::mutex> lock(shared.mutex);
@@ -889,11 +1165,8 @@ int32_t prepare(void* instance, const AudPrepareInfo* info) {
   shared.config.generation += 1;
   const Config config = snapshot(shared);
   node->channels = channels;
-  node->scratch.assign(static_cast<size_t>(channels) * info->max_frames, 0.0f);
-  node->scratchPointers.resize(channels);
-  for (uint32_t c = 0; c < channels; ++c) {
-    node->scratchPointers[c] = node->scratch.data() + c * info->max_frames;
-  }
+  node->scratch.swap(scratch);
+  node->scratchPointers.swap(scratchPointers);
   node->fadeFrames = std::max<uint32_t>(
       1, static_cast<uint32_t>(std::lround(kCrossfadeSeconds * info->sample_rate)));
   // A fade that runs goes on at the new rate.
@@ -927,106 +1200,39 @@ void setParam(void* instance, uint32_t index, float value) {
 void process(void* instance, const AudProcessContext* context) {
   Node& node = *static_cast<Node*>(instance);
   postRetired(node);
-  // A synth a load handed over waits while a fade runs, at most 5 ms.
-  if (node.fading == nullptr && hasFreeSlot(node)) {
-    sfz::Synth* next =
-        node.shared->ready.exchange(nullptr, std::memory_order_acq_rel);
-    if (next != nullptr) adopt(node, next);
-  }
+  adoptReady(node);
+  followFreewheeling(node, context);
+  dispatchEvents(node, context);
   if (context->num_output_buses == 0 || context->outputs == nullptr) return;
-  const AudAudioBus& out = context->outputs[0];
-  const bool offline = (context->flags & AUD_PROCESS_OFFLINE) != 0;
-  if (offline != node.freewheeling) {
-    node.freewheeling = offline;
-    sfz::Synth* synths[2] = {node.active, node.fading};
-    for (sfz::Synth* synth : synths) {
-      if (synth == nullptr) continue;
-      if (offline) {
-        synth->enableFreeWheeling();
-      } else {
-        synth->disableFreeWheeling();
-      }
-    }
-  }
-  for (uint32_t i = 0; i < context->num_events; ++i) {
-    const AudEvent& event = context->events[i];
-    if (event.type == AUD_EVENT_PARAM && event.words[0] != AUD_SFZ_PARAM_VOLUME) {
-      applyParam(node, event.words[0], aud_event_param_value(&event), event.words[2]);
-      continue;
-    }
-    if (node.active == nullptr) continue;
-    switch (event.type) {
-      case AUD_EVENT_UMP:
-        dispatchUmp(node, *node.active, event);
-        break;
-      case AUD_EVENT_CONTROL:
-        dispatchControl(node, *node.active, event);
-        break;
-      case AUD_EVENT_MESSAGE:
-        dispatchMessage(node, *node.active, event);
-        break;
-      default:
-        break;
-    }
-  }
   if (node.active == nullptr) {
-    clearBus(out, context->frames);
-    return;
+    clearBus(context->outputs[0], context->frames);
+  } else {
+    sendTransport(node, *node.active, context->transport);
+    render(node, context);
   }
-  sendTransport(node, *node.active, context->transport);
-  render(node, context);
   applyVolume(node, context);
   report(node);
 }
 
 int32_t setString(void* instance, uint32_t key, const char* value) {
   auto* node = static_cast<Node*>(instance);
-  Shared& shared = *node->shared;
-  const std::string text = value != nullptr ? value : "";
-  std::string name;
-  {
-    std::lock_guard<std::mutex> lock(shared.mutex);
-    Source& source = shared.source;
-    switch (key) {
-      case AUD_SFZ_KEY_FILE:
-        source.kind = text.empty() ? Source::Kind::none : Source::Kind::file;
-        source.file = text;
-        name = text;
-        break;
-      case AUD_SFZ_KEY_VIRTUAL_PATH:
-        // The path the next text resolves its samples against: a text and
-        // its path come together, so the path starts no load of its own.
-        source.virtualPath = text.empty() ? Source().virtualPath : text;
-        return AUD_OK;
-      case AUD_SFZ_KEY_TEXT:
-        source.kind = text.empty() ? Source::Kind::none : Source::Kind::text;
-        source.text = text;
-        name = source.virtualPath;
-        break;
-      case AUD_SFZ_KEY_SCALA_FILE:
-        source.scalaFile = text;
-        source.scalaText.clear();
-        if (source.kind == Source::Kind::none) return AUD_OK;
-        name = text;
-        break;
-      case AUD_SFZ_KEY_SCALA_TEXT:
-        source.scalaText = text;
-        source.scalaFile.clear();
-        if (source.kind == Source::Kind::none) return AUD_OK;
-        name = "scala";
-        break;
-      default:
-        return AUD_ERROR_INVALID_ARGUMENT;
-    }
+  Setting setting;
+  try {
+    setting = changeSource(*node->shared, key, value);
+  } catch (const std::exception&) {
+    return AUD_ERROR_OUT_OF_MEMORY;
   }
-  return startLoad(*node, name);
+  return setting.loads ? startLoad(*node, setting.name) : setting.result;
 }
 
 uint32_t getTail(void* instance) {
   Shared& shared = *static_cast<Node*>(instance)->shared;
   std::lock_guard<std::mutex> lock(shared.mutex);
-  return static_cast<uint32_t>(
-      std::ceil(static_cast<double>(shared.tailSeconds) * shared.config.sampleRate));
+  // sfizz takes releases longer than a tail counts, e.g. ampeg_release=1e30.
+  const double frames =
+      std::ceil(static_cast<double>(shared.tailSeconds) * shared.config.sampleRate);
+  if (!(frames < static_cast<double>(kLongestTail))) return kLongestTail;
+  return frames > 0 ? static_cast<uint32_t>(frames) : 0;
 }
 
 // ############################################################################

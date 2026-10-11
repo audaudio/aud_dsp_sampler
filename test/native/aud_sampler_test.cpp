@@ -8,7 +8,11 @@
 // registration, loads with their ids, the swap of instruments, the
 // controllers, the messages, the streams and the store with the budget.
 
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <functional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -50,6 +54,77 @@ size_t since(const Fixture& f, uint32_t rendered, uint32_t from = 0) {
   return f.left.size() - rendered + from;
 }
 
+// A Scala scale of twelve equal steps of 110 cents: A4 stays, A#4 rises by
+// 110 cents instead of 100.
+const char* const kWideScale =
+    "! wide.scl\nTwelve steps of 110 cents\n12\n110.\n220.\n330.\n440.\n550.\n660.\n"
+    "770.\n880.\n990.\n1100.\n1210.\n1320.\n";
+
+// The first number of the answer to a message without arguments, or NaN.
+double numberOf(Fixture& f, int32_t node, const char* path) {
+  const Reply reply = ask(f, node, path);
+  return reply.numbers.empty() ? std::nan("") : reply.numbers.front();
+}
+
+// A UMP of the MIDI 2.0 channel voice protocol on channel 0.
+void sendMidi2(Fixture& f, int32_t node, uint32_t status, uint32_t index, uint32_t value) {
+  const uint32_t words[2] = {aud_ump_midi2_word0(0, status, 0, index, 0), value};
+  f.send(node, aud_event_ump(words, 2, 0, 0));
+}
+
+// A numeric control with an argument of the type `tag`.
+void sendControl(Fixture& f, int32_t node, uint32_t control, uint32_t tag, uint32_t bits = 0) {
+  const AudEvent event = {sizeof(AudEvent), AUD_EVENT_CONTROL, 0, 0, 0, {control, tag, bits, 0}};
+  f.send(node, event);
+}
+
+// A message with the arguments given; the next block delivers it.
+int32_t sendMessage(Fixture& f, int32_t node, const char* path, std::vector<AudMessageArg> args) {
+  for (AudMessageArg& arg : args) arg.struct_size = sizeof(AudMessageArg);
+  const AudMessage message{sizeof(AudMessage), static_cast<uint32_t>(args.size()), path,
+                           args.data()};
+  return aud_graph_send_message(f.graph, node, &message, nullptr, 0);
+}
+
+// A transport request of the graph, at once.
+void requestTransport(Fixture& f, uint32_t type, double value = 0) {
+  constexpr uint32_t kQuarters = 4;
+  AudTransportRequest request{};
+  request.struct_size = sizeof(AudTransportRequest);
+  request.type = type;
+  request.at.struct_size = sizeof(AudTimestamp);
+  request.value = value;
+  request.numerator = kQuarters;
+  request.denominator = kQuarters;
+  AUD_CHECK(aud_graph_transport(f.graph, &request) == AUD_OK);
+}
+
+// The cycles of an amplitude modulation between two frames: the peaks of
+// windows of 10 ms trace the envelope, which crosses its mean upwards once
+// per cycle.
+uint32_t modulationCycles(const std::vector<float>& samples, size_t from, size_t to) {
+  constexpr size_t kWindow = 480;
+  std::vector<float> envelope;
+  for (size_t start = from; start + kWindow <= to; start += kWindow) {
+    envelope.push_back(peak(samples, start, start + kWindow));
+  }
+  double mean = 0;
+  for (float value : envelope) mean += value;
+  mean /= static_cast<double>(std::max<size_t>(1, envelope.size()));
+  uint32_t cycles = 0;
+  for (size_t i = 1; i < envelope.size(); ++i) {
+    if (envelope[i - 1] < mean && envelope[i] >= mean) cycles += 1;
+  }
+  return cycles;
+}
+
+// What a host logged last.
+std::string g_logged;
+
+void logToTest(void*, int32_t, const char* message) { g_logged = message; }
+
+int32_t refuseCache(void*, const AudCacheVTable*, void*) { return AUD_ERROR_CAPACITY; }
+
 }  // namespace
 
 // ############################################################################
@@ -79,6 +154,56 @@ AUD_TEST(registers_the_sampler_with_abi_0_4) {
   other = *f.host();
   other.struct_size = 64;
   AUD_CHECK(aud_dsp_sampler_register(&other) == AUD_ERROR_ABI_MINOR);
+}
+
+AUD_TEST(refuses_a_host_without_a_function_it_calls) {
+  Fixture f;
+  const AudNodeDescriptor* d = aud_graph_node_type_by_id(f.graph, AUD_DSP_SAMPLER_SFZ_TYPE_ID);
+  AUD_CHECK(d != nullptr);
+  if (d == nullptr) return;
+  // Each function the node calls, missing in turn: the node refuses the
+  // host at once instead of crashing later, some on the audio thread.
+  const std::vector<std::function<void(AudHostApi&)>> drops = {
+      [](AudHostApi& h) { h.post_task = nullptr; },
+      [](AudHostApi& h) { h.begin_load = nullptr; },
+      [](AudHostApi& h) { h.load_progress = nullptr; },
+      [](AudHostApi& h) { h.end_load = nullptr; },
+      [](AudHostApi& h) { h.load_cancelled = nullptr; },
+      [](AudHostApi& h) { h.register_cache = nullptr; },
+      [](AudHostApi& h) { h.cache_changed = nullptr; },
+      [](AudHostApi& h) { h.cache_budget = nullptr; },
+      [](AudHostApi& h) { h.report = nullptr; },
+      [](AudHostApi& h) { h.emit_message = nullptr; },
+      [](AudHostApi& h) { h.struct_size = 64; },
+  };
+  for (const auto& drop : drops) {
+    AudHostApi host = *f.host();
+    drop(host);
+    AUD_CHECK(d->vtable->create(d, &host) == nullptr);
+  }
+  AUD_CHECK(d->vtable->create(d, nullptr) == nullptr);
+  // The engine's own host has them all.
+  void* node = d->vtable->create(d, f.host());
+  AUD_CHECK(node != nullptr);
+  if (node != nullptr) d->vtable->destroy(node);
+}
+
+AUD_TEST(refuses_a_host_whose_engine_takes_no_more_caches) {
+  Fixture f;
+  const AudNodeDescriptor* d = aud_graph_node_type_by_id(f.graph, AUD_DSP_SAMPLER_SFZ_TYPE_ID);
+  AUD_CHECK(d != nullptr);
+  if (d == nullptr) return;
+  AudHostApi host = *f.host();
+  host.register_cache = refuseCache;
+  host.log = logToTest;
+  g_logged.clear();
+  AUD_CHECK(d->vtable->create(d, &host) == nullptr);
+  AUD_CHECK(g_logged ==
+            "aud.sampler.sfz: the sample store cannot join the sample cache budget (" +
+                std::to_string(AUD_ERROR_CAPACITY) + ")");
+  // Without a log the node is refused all the same.
+  host.log = nullptr;
+  AUD_CHECK(d->vtable->create(d, &host) == nullptr);
 }
 
 // ############################################################################
@@ -246,6 +371,72 @@ AUD_TEST(unloads_the_instrument_with_an_empty_text) {
   // A Scala tuning without an instrument starts no load.
   AUD_CHECK(aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_SCALA_TEXT, "") == AUD_OK);
   AUD_CHECK(aud_graph_set_string(f.graph, node, 99, "x") == AUD_ERROR_INVALID_ARGUMENT);
+}
+
+AUD_TEST(a_load_that_starts_with_a_reload_ends_well) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  const std::string a = loopInstrument(folder, "a", 375);
+  const std::string b = loopInstrument(folder, "b", 750);
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), a));
+  // A change of the polyphony reloads on a worker while the control thread
+  // starts a load: whichever comes first, the load is the newer one, and a
+  // load yields only to a newer load.
+  constexpr int kRounds = 40;
+  std::vector<int32_t> ids;
+  for (int i = 0; i < kRounds; ++i) {
+    f.param(node, AUD_SFZ_PARAM_POLYPHONY, static_cast<float>(16 + i % 2));
+    f.renderLive(256);
+    const bool high = i % 2 == 0;
+    ids.push_back(f.loadText(node, folder.file(high ? "b.sfz" : "a.sfz"), high ? b : a));
+    f.renderLive(256);
+  }
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  for (int32_t id : ids) {
+    const int32_t result = f.load(id).result;
+    AUD_CHECK(result == AUD_OK || result == AUD_ERROR_CANCELLED);
+  }
+  AUD_CHECK(f.load(ids.back()).result == AUD_OK);
+  waitTasks();
+  f.renderOffline(256);
+  f.noteOn(node, 69);
+  f.renderOffline(4800);
+  AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 4800, 480), f.left.size()), 375.0, 1.0);
+}
+
+AUD_TEST(a_load_that_runs_takes_a_polyphony_change) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  int32_t id = 0;
+  {
+    // The load and the reload of the change wait behind the hold; the
+    // reload stands back while the load runs, which takes the change.
+    WorkerHold hold(f.host());
+    id = f.loadText(node, folder.file("b.sfz"), loopInstrument(folder, "b", 750));
+    AUD_CHECK(id > 0);
+    f.param(node, AUD_SFZ_PARAM_POLYPHONY, 2);
+    f.renderLive(256);
+  }
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  waitTasks();
+  AUD_CHECK(f.load(id).result == AUD_OK);
+  f.renderOffline(512);
+  f.noteOn(node, 60);
+  f.noteOn(node, 64);
+  f.noteOn(node, 67);
+  f.renderOffline(2048);
+  const Reply voices = ask(f, node, "/num_active_voices");
+  AUD_CHECK(voices.ints == std::vector<int64_t>{2});
+  f.noteOff(node, 60);
+  f.noteOff(node, 64);
+  f.noteOff(node, 67);
+  f.renderOffline(9600);
+  f.noteOn(node, 69);
+  f.renderOffline(4800);
+  AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 4800, 480), f.left.size()), 750.0, 1.0);
 }
 
 // ############################################################################
@@ -433,12 +624,7 @@ AUD_TEST(tunes_with_the_tuning_frequency_and_a_scala_text) {
                  1.0);
   f.noteOff(node, 69);
   f.param(node, AUD_SFZ_PARAM_TUNING_FREQUENCY, 440.0f);
-  // A Scala scale of twelve equal steps of 110 cents: A4 stays, A#4 rises
-  // by 110 cents instead of 100.
-  const std::string scala =
-      "! wide.scl\nTwelve steps of 110 cents\n12\n110.\n220.\n330.\n440.\n550.\n660.\n"
-      "770.\n880.\n990.\n1100.\n1210.\n1320.\n";
-  const int32_t id = aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_SCALA_TEXT, scala.c_str());
+  const int32_t id = aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_SCALA_TEXT, kWideScale);
   AUD_CHECK(id > 0);
   AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
   AUD_CHECK(f.load(id).result == AUD_OK);
@@ -447,6 +633,82 @@ AUD_TEST(tunes_with_the_tuning_frequency_and_a_scala_text) {
   f.renderOffline(9600);
   AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 9600, 480), f.left.size()),
                  375.0 * std::pow(2.0, 1.1 / 12.0), 1.5);
+}
+
+AUD_TEST(ramps_the_volume_before_the_first_instrument) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  // A ramp reaches the node as an event of a block, while no instrument
+  // plays yet.
+  f.param(node, AUD_SFZ_PARAM_VOLUME, -6.0206f, 480);
+  f.renderOffline(1024);
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.renderOffline(256);
+  f.noteOn(node, 69);
+  f.renderOffline(4800);
+  AUD_CHECK_NEAR(peak(f.left, since(f, 4800, 480), f.left.size()), 0.5f * kLevel, 0.002);
+}
+
+AUD_TEST(rounds_the_quality_steps) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.renderOffline(256);
+  // Automation may land next to a step.
+  f.param(node, AUD_SFZ_PARAM_SAMPLE_QUALITY, 2.9999998f);
+  f.param(node, AUD_SFZ_PARAM_OSCILLATOR_QUALITY, 1.9999999f);
+  f.renderOffline(256);
+  AUD_CHECK(ask(f, node, "/sample_quality").ints == std::vector<int64_t>{3});
+  AUD_CHECK(ask(f, node, "/oscillator_quality").ints == std::vector<int64_t>{2});
+}
+
+AUD_TEST(stretches_the_tuning) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  // Three octaves above A4, where a piano's stretch is wide.
+  constexpr uint32_t kHighNote = 105;
+  const auto frequencyOfHighNote = [&f, node] {
+    f.renderOffline(2048);
+    f.noteOn(node, kHighNote);
+    f.renderOffline(9600);
+    const double frequency = frequencyOf(f.left, since(f, 9600, 480), f.left.size());
+    f.noteOff(node, kHighNote);
+    f.renderOffline(9600);
+    return frequency;
+  };
+  const double equal = frequencyOfHighNote();
+  AUD_CHECK_NEAR(equal, 375.0 * 8, 2.0);
+  f.param(node, AUD_SFZ_PARAM_STRETCH_TUNING, 1.0f);
+  const double stretched = frequencyOfHighNote();
+  AUD_CHECK(stretched > equal * std::pow(2.0, 5.0 / 1200.0));
+}
+
+AUD_TEST(tunes_with_a_scala_file) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  // Without an instrument the tuning waits for one.
+  writeText(folder.file("wide.scl"), kWideScale);
+  AUD_CHECK(aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_SCALA_FILE,
+                                 folder.file("wide.scl").c_str()) == AUD_OK);
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.renderOffline(256);
+  f.noteOn(node, 70);
+  f.renderOffline(9600);
+  AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 9600, 480), f.left.size()),
+                 375.0 * std::pow(2.0, 1.1 / 12.0), 1.5);
+  // A file that is not there fails the load and keeps the instrument.
+  const int32_t id = aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_SCALA_FILE,
+                                          folder.file("missing.scl").c_str());
+  AUD_CHECK(id > 0);
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  AUD_CHECK(f.load(id).result == AUD_ERROR_FAILED);
+  AUD_CHECK(std::string(f.load(id).message) ==
+            "sfizz could not load " + folder.file("missing.scl"));
 }
 
 // ############################################################################
@@ -473,6 +735,108 @@ AUD_TEST(plays_midi_2_and_reports_per_note_controllers_it_cannot_play) {
   f.send(node, aud_event_control_float(7, 0.0f, 0, 0));
   f.renderOffline(4800);
   AUD_CHECK(peak(f.left, since(f, 4800, 2400), f.left.size()) < 1e-4f);
+}
+
+AUD_TEST(plays_the_controllers_of_midi_1_and_2) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.renderOffline(256);
+  // MIDI 2.0 with 32-bit values: a CC at a quarter, the pitch bend a half
+  // up, the channel pressure at three quarters, poly pressure on note 61.
+  sendMidi2(f, node, AUD_UMP_STATUS_CONTROL_CHANGE, 1, 0x40000000u);
+  sendMidi2(f, node, AUD_UMP_STATUS_PITCH_BEND, 0, 0xC0000000u);
+  sendMidi2(f, node, AUD_UMP_STATUS_CHANNEL_PRESSURE, 0, 0xC0000000u);
+  sendMidi2(f, node, AUD_UMP_STATUS_POLY_PRESSURE, 61, 0x80000000u);
+  // MIDI 1.0 with 7-bit values: poly pressure on note 60.
+  const uint32_t poly = aud_ump_midi1_word(0, 0xA0, 60, 127);
+  f.send(node, aud_event_ump(&poly, 1, 0, 0));
+  f.renderOffline(256);
+  AUD_CHECK_NEAR(numberOf(f, node, "/cc1/value"), 0.25, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/pitch_bend"), 0.5, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/aftertouch"), 0.75, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/poly_aftertouch/61"), 0.5, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/poly_aftertouch/60"), 1.0, 1e-6);
+  // MIDI 1.0 channel pressure and pitch bend.
+  const uint32_t pressure = aud_ump_midi1_word(0, 0xD0, 32, 0);
+  f.send(node, aud_event_ump(&pressure, 1, 0, 0));
+  f.bend(node, 4096);
+  f.renderOffline(256);
+  AUD_CHECK_NEAR(numberOf(f, node, "/aftertouch"), 32.0 / 127, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/pitch_bend"), -0.5, 1e-6);
+}
+
+AUD_TEST(changes_the_program_with_midi_1_and_2) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  const std::string text = loopInstrument(folder, "low", 375, "loprog=0 hiprog=4") +
+                           loopInstrument(folder, "high", 750, "loprog=5 hiprog=9");
+  AUD_CHECK(f.loadAndWait(node, folder.file("programs.sfz"), text));
+  f.renderOffline(256);
+  const auto frequencyOfNote = [&f, node] {
+    f.noteOn(node, 69);
+    f.renderOffline(4800);
+    const double frequency = frequencyOf(f.left, since(f, 4800, 480), f.left.size());
+    f.noteOff(node, 69);
+    f.renderOffline(9600);
+    return frequency;
+  };
+  AUD_CHECK_NEAR(frequencyOfNote(), 375.0, 1.0);
+  const uint32_t program = aud_ump_midi1_word(0, 0xC0, 5, 0);
+  f.send(node, aud_event_ump(&program, 1, 0, 0));
+  AUD_CHECK_NEAR(frequencyOfNote(), 750.0, 1.0);
+  sendMidi2(f, node, AUD_UMP_STATUS_PROGRAM_CHANGE, 0, 0);  // program 0 in the top byte
+  AUD_CHECK_NEAR(frequencyOfNote(), 375.0, 1.0);
+}
+
+AUD_TEST(takes_numeric_controls_of_every_type) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.renderOffline(256);
+  float quarter = 0.25f;
+  uint32_t quarterBits;
+  std::memcpy(&quarterBits, &quarter, sizeof(quarterBits));
+  sendControl(f, node, 20, AUD_ARG_INT32, 64);
+  sendControl(f, node, 21, AUD_ARG_TRUE);
+  sendControl(f, node, 22, AUD_ARG_TRUE);
+  sendControl(f, node, 22, AUD_ARG_FALSE);
+  sendControl(f, node, 23, AUD_ARG_FLOAT, quarterBits);
+  // Another type, and a control beyond sfizz's CCs, change nothing.
+  sendControl(f, node, 24, AUD_ARG_DOUBLE);
+  sendControl(f, node, 600, AUD_ARG_TRUE);
+  f.renderOffline(256);
+  AUD_CHECK_NEAR(numberOf(f, node, "/cc20/value"), 64.0 / 127, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/cc21/value"), 1.0, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/cc22/value"), 0.0, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/cc23/value"), 0.25, 1e-6);
+  AUD_CHECK_NEAR(numberOf(f, node, "/cc24/value"), 0.0, 1e-6);
+}
+
+AUD_TEST(a_first_instrument_takes_over_the_controllers_sent_before_it) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  f.cc(node, 7, 0);     // the MIDI volume closed
+  f.bend(node, 16383);  // two semitones up, sfizz's default range
+  // Nothing answers a message without an instrument: it counts as
+  // unsupported.
+  AUD_CHECK(message(f, node, "/cc7/value", {0.5f}) == AUD_OK);
+  f.renderOffline(256);
+  AUD_CHECK(f.diagnostics(AUD_ERROR_UNSUPPORTED, node) == 1);
+  AUD_CHECK(replies(f).empty());
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.renderOffline(256);
+  f.noteOn(node, 69);
+  f.renderOffline(4800);
+  AUD_CHECK(peak(f.left, since(f, 4800), f.left.size()) == 0.0f);
+  f.cc(node, 7, 127);
+  f.renderOffline(9600);
+  AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 9600, 4800), f.left.size()),
+                 375.0 * std::pow(2.0, 2.0 / 12.0), 1.5);
 }
 
 // ############################################################################
@@ -503,6 +867,59 @@ AUD_TEST(answers_messages_through_the_engine) {
   f.renderOffline(256);
   AUD_CHECK(replies(f).empty());
   AUD_CHECK(f.stats().messages_dropped == 0);
+}
+
+AUD_TEST(refuses_messages_sfizz_would_copy_or_parse) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), sineInstrument(folder, "a")));
+  f.renderOffline(256);
+  // A string, a blob and five arguments: sfizz would copy or parse them on
+  // the audio thread, or no path of it takes them.
+  AudMessageArg text{};
+  text.type = AUD_ARG_STRING;
+  text.value.s = "forward";
+  const uint8_t bytes[4] = {1, 2, 3, 4};
+  AudMessageArg blob{};
+  blob.type = AUD_ARG_BLOB;
+  blob.size = sizeof(bytes);
+  blob.value.b = bytes;
+  AudMessageArg number{};
+  number.type = AUD_ARG_FLOAT;
+  number.value.f = 0.5f;
+  AUD_CHECK(sendMessage(f, node, "/region0/direction", {text}) == AUD_OK);
+  AUD_CHECK(sendMessage(f, node, "/region0/sample", {blob}) == AUD_OK);
+  AUD_CHECK(sendMessage(f, node, "/cc7/value", std::vector<AudMessageArg>(5, number)) == AUD_OK);
+  f.renderOffline(256);
+  AUD_CHECK(replies(f).empty());
+  AUD_CHECK(f.diagnostics(AUD_ERROR_UNSUPPORTED, node) == 3);
+  AUD_CHECK(f.stats().messages_dropped == 0);
+}
+
+// ############################################################################
+// The transport
+
+AUD_TEST(follows_the_tempo_of_the_transport) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  // An LFO swings the volume of a held sine by 12 dB once per beat.
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"),
+                          loopInstrument(folder, "a", 375, "lfo1_beats=1 lfo1_volume=12")));
+  requestTransport(f, AUD_TRANSPORT_REQUEST_SET_TEMPO, 120);
+  requestTransport(f, AUD_TRANSPORT_REQUEST_START);
+  f.renderOffline(256);
+  f.noteOn(node, 69);
+  f.renderOffline(4800);
+  // Two seconds at 120 and at 240 beats per minute: 4 and 8 cycles.
+  constexpr uint32_t kTwoSeconds = 96000;
+  f.renderOffline(kTwoSeconds);
+  AUD_CHECK_NEAR(modulationCycles(f.left, since(f, kTwoSeconds), f.left.size()), 4, 1);
+  requestTransport(f, AUD_TRANSPORT_REQUEST_SET_TEMPO, 240);
+  f.renderOffline(4800);
+  f.renderOffline(kTwoSeconds);
+  AUD_CHECK_NEAR(modulationCycles(f.left, since(f, kTwoSeconds), f.left.size()), 8, 1);
 }
 
 // ############################################################################
@@ -658,7 +1075,8 @@ AUD_TEST(refuses_an_instrument_whose_heads_exceed_the_budget) {
     const AudLoadInfo info = f.load(id);
     AUD_CHECK(info.result == AUD_ERROR_CAPACITY);
     AUD_CHECK(std::string(info.message) ==
-              "the samples of the instrument pin 64 KB, more than the sample cache budget of 48 KB");
+              "the samples of the instrument pin 64 KB, more than the sample cache budget of "
+              "48 KB");
     // The old instrument plays on.
     f.renderOffline(4800);
     AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 4800), f.left.size()), 375.0, 1.0);
@@ -688,6 +1106,18 @@ AUD_TEST(reports_the_release_as_its_tail) {
   f.renderOffline(28800);
   AUD_CHECK(peak(f.left, since(f, 28800, 4000), since(f, 28800, 4800)) > 0.1f * kLevel);
   AUD_CHECK(peak(f.left, since(f, 28800, 26400), f.left.size()) == 0.0f);
+}
+
+AUD_TEST(reports_a_release_beyond_any_tail_as_the_longest_tail) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  // sfizz takes releases longer than a tail counts.
+  for (const std::string release : {"1e6", "1e30"}) {
+    AUD_CHECK(f.loadAndWait(node, folder.file("long.sfz"),
+                            loopInstrument(folder, "long", 375, "ampeg_release=" + release)));
+    AUD_CHECK(aud_graph_output_tail(f.graph) == AUD_TAIL_INFINITE - 1);
+  }
 }
 
 AUD_TEST(prepares_a_load_that_runs_for_the_new_format) {

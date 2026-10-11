@@ -7,6 +7,7 @@
 #include "aud_dsp_sampler.h"
 
 #include "FilePool.h"
+
 #include "aud_sfz_node.hpp"
 
 namespace {
@@ -21,23 +22,6 @@ const AudBusDescriptor kOutputs[] = {
 const AudEventPortDescriptor kInputs[] = {
     {sizeof(AudEventPortDescriptor), "midi", "MIDI",
      AUD_EVENT_PORT_MIDI | AUD_EVENT_PORT_CONTROL, 0},
-};
-
-const AudParamDescriptor kParams[] = {
-    {sizeof(AudParamDescriptor), "volume", "Volume", "dB", -60.0f, 6.0f, 0.0f,
-     AUD_PARAM_AUTOMATABLE | AUD_PARAM_RAMPED, 0, 0},
-    {sizeof(AudParamDescriptor), "polyphony", "Polyphony", "", 1.0f, 256.0f,
-     64.0f, AUD_PARAM_STEPPED, 255, 0},
-    {sizeof(AudParamDescriptor), "sample_quality", "Sample quality", "", 0.0f,
-     10.0f, 2.0f, AUD_PARAM_AUTOMATABLE | AUD_PARAM_STEPPED, 10, 0},
-    {sizeof(AudParamDescriptor), "oscillator_quality", "Oscillator quality", "",
-     0.0f, 3.0f, 1.0f, AUD_PARAM_AUTOMATABLE | AUD_PARAM_STEPPED, 3, 0},
-    // The polyphony and the tuning load the instrument again: notes that
-    // sound fade out, so they are no automation targets.
-    {sizeof(AudParamDescriptor), "tuning_frequency", "Tuning frequency", "Hz",
-     400.0f, 480.0f, 440.0f, 0, 0, 0},
-    {sizeof(AudParamDescriptor), "stretch_tuning", "Stretch tuning", "", 0.0f,
-     1.0f, 0.0f, 0, 0, 0},
 };
 
 const AudStringKeyDescriptor kKeys[] = {
@@ -79,7 +63,7 @@ const AudNodeDescriptor kDescriptor = {
     nullptr,
     AUD_SFZ_NUM_PARAMS,
     sizeof(kKeys) / sizeof(kKeys[0]),
-    kParams,
+    aud_sfz::kParams,
     kKeys,
     &kVTable,
 };
