@@ -185,8 +185,11 @@ function rtsanCompiler() {
 
 // The units to compile with their own flags: the graph engine as C++17 with
 // the watchdog, the node as C++14 like the build hook compiles it on Apple,
-// sfizz's C++ as gnu++14 and its C as gnu11, the tests as
-// C++17.
+// sfizz's C++ as gnu++14 and its C as gnu11, the tests as C++17. The tests
+// of the fork, sfizz_*_test.cpp, compile like the fork: sfizz's types
+// depend on the language version - std::filesystem or ghc's, Abseil's
+// string_view and optional or the standard's -, and a test must see them
+// as sfizz does.
 function units(context) {
   const graphFlags = ['-std=c++17', '-DAUD_GRAPH_WATCHDOG=1'];
   if (context.rtsan) graphFlags.push('-DAUD_GRAPH_RTSAN=1');
@@ -214,7 +217,8 @@ function units(context) {
     });
   }
   for (const file of context.testSources) {
-    const flags = ['-std=c++17', ...sfizzDefines];
+    const fork = path.basename(file).startsWith('sfizz_');
+    const flags = [fork ? '-std=gnu++14' : '-std=c++17', ...sfizzDefines];
     if (context.pristineFilters && file.endsWith('sfizz_rbj_filters_test.cpp')) {
       // A C string literal of the path: JSON escapes quotes and backslashes
       // the way C does.

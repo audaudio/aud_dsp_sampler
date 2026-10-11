@@ -16,6 +16,11 @@
 // recorded there), under the class names of that output, so that
 // SfzFilterImpls.hpp wraps them as before. Include this header after the
 // declaration of sfzFilterDsp.
+//
+// The file is Audanika's own code under the MIT license of the
+// aud_dsp_sampler package, the LICENSE file in the root of its repository,
+// not under sfizz's BSD-2-Clause license; src/third_party/NOTICES.md lists
+// it apart from sfizz.
 
 #pragma once
 
@@ -30,6 +35,11 @@ constexpr double kLn2 = 0.693147180559945309417232121458;
 
 /// Time constant of the coefficient smoothing, in seconds
 constexpr double kSmoothingTime = 1e-3;
+
+/// The highest cutoff as a share of the sample rate: below Nyquist, where
+/// the formulas hold. It limits only rates below 40.8 kHz, where the cutoff
+/// limit of 20 kHz lies above it.
+constexpr double kMaxCutoffPerSampleRate = 0.49;
 
 /**
    Biquad coefficients normalized by a0:
@@ -53,11 +63,11 @@ inline double clamp(double x, double lo, double hi)
     return std::min(hi, std::max(lo, x));
 }
 
-/// The cutoff in Hz, limited to [1, 20000]; this also keeps it >= 0 as the
-/// formulas require
-inline double cutoffHz(float cutoff)
+/// The cutoff in Hz, limited to [1, 20000] and below Nyquist; this also
+/// keeps it >= 0 as the formulas require
+inline double cutoffHz(float cutoff, double sampleRate)
 {
-    return clamp(cutoff, 1.0, 20000.0);
+    return std::min(clamp(cutoff, 1.0, 20000.0), kMaxCutoffPerSampleRate * sampleRate);
 }
 
 /// Q of a resonance in dB, limited to [-60, 60] dB
@@ -260,6 +270,7 @@ class sfzRbjFilter : public sfzFilterDsp {
 public:
     void init(int sampleRate) override
     {
+        fSampleRate = sampleRate;
         fTwoPiOverSampleRate = sfz::rbj::kTwoPi / sampleRate;
         fBiquads.setSampleRate(sampleRate);
         fParams = Params {};
@@ -273,7 +284,7 @@ public:
 
     void compute(int count, const float* const* inputs, float* const* outputs) override
     {
-        const double w0 = fTwoPiOverSampleRate * sfz::rbj::cutoffHz(fParams.cutoff);
+        const double w0 = fTwoPiOverSampleRate * sfz::rbj::cutoffHz(fParams.cutoff, fSampleRate);
         fBiquads.process(design(fParams, w0), fSmoothEnable, count, inputs, outputs);
     }
 
@@ -294,6 +305,7 @@ protected:
     Params fParams;
 
 private:
+    double fSampleRate = 0.0;
     double fTwoPiOverSampleRate = 0.0;
     sfz::rbj::SmoothedBiquads<Channels, Sections> fBiquads;
 };

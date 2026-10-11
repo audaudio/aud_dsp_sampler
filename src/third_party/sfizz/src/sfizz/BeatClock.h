@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// beat numbers, their quantization and the beats per bar of every frame are
+// gone with the metronome, their only reader.
+
 #pragma once
 #include "Buffer.h"
 #include <absl/types/span.h>
@@ -120,25 +124,12 @@ public:
      */
     bool isPlaying() const noexcept { return isPlaying_; }
     /**
-     * @brief Get the beat number for each frame of the current cycle.
-     *
-     * This signal is quantized to a fixed resolution, such that it never
-     * suffers 1-off errors due to imprecision in the host time position.
-     */
-    absl::Span<const int> getRunningBeatNumber();
-    /**
      * @brief Get the beat position for each frame of the current cycle.
      *
-     * This is a fractional equivalent of the beat number, however the beat
-     * boundaries can be traversed erratically due to approximation errors.
-     * If you need to perform work on exact beat transitions, prefer
-     * `getRunningBeatNumber` instead.
+     * The beat boundaries can be traversed erratically due to approximation
+     * errors.
      */
     absl::Span<const float> getRunningBeatPosition();
-    /**
-     * @brief Get the time signature numerator for each frame of the current cycle.
-     */
-    absl::Span<const int> getRunningBeatsPerBar();
 
     /**
      * @brief Get the last BeatPosition
@@ -175,13 +166,6 @@ private:
 private:
     double samplePeriod_ { 1.0 / config::defaultSampleRate };
 
-    // quantization
-    typedef int64_t qbeats_t;
-    static constexpr int resolution = 16; // bits
-    static qbeats_t quantize(int beats) { return beats * (1 << resolution); }
-    static qbeats_t quantize(double beats);
-    template <class T> static T dequantize(qbeats_t qbeats);
-
     // status of current cycle
     unsigned currentCycleFrames_ = 0;
     unsigned currentCycleFill_ = 0;
@@ -199,9 +183,7 @@ private:
     // plugin-side counter
     BBT lastClientPos_;
 
-    Buffer<int> runningBeatNumber_ { config::defaultSamplesPerBlock };
     Buffer<float> runningBeatPosition_ { config::defaultSamplesPerBlock };
-    Buffer<int> runningBeatsPerBar_ { config::defaultSamplesPerBlock };
 };
 
 } // namespace sfz

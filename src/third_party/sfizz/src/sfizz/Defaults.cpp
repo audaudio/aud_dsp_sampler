@@ -1,3 +1,6 @@
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// specs of the fverb opcodes are gone with the effect.
+
 #include "Defaults.h"
 
 namespace sfz {
@@ -186,10 +189,6 @@ BoolSpec compSTLink { false, {0, 1}, 0 };
 FloatSpec compThreshold { 0.0f, {-100.0f, 0.0f}, 0 };
 FloatSpec compRatio { 1.0f, {1.0f, 50.0f}, 0 };
 FloatSpec compGain { 0.0f, {-100.0f, 100.0f}, kDb2Mag };
-FloatSpec fverbSize { 0.0f, {0.0f, 100.0f}, 0 };
-FloatSpec fverbPredelay { 0.0f, {0.0f, 10.0f}, 0 };
-FloatSpec fverbTone { 100.0f, {0.0f, 100.0f}, 0 };
-FloatSpec fverbDamp { 0.0f, {0.0f, 100.0f}, 0 };
 BoolSpec gateSTLink { false, {0, 1}, 0 };
 FloatSpec gateAttack { 0.005f, {0.0f, 10.0f}, 0 };
 FloatSpec gateRelease { 0.05f, {0.0f, 10.0f}, 0 };

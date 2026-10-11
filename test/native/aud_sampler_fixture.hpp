@@ -8,9 +8,16 @@
 // the sampler registered, instruments written to a temporary folder from
 // generated samples, the workers held at will, and the messages of the
 // node unpacked.
+//
+// The tests of the fork include it as gnu++14, the others as C++17: it uses
+// no type whose layout depends on the language version, e.g. no
+// std::filesystem, and paths are plain strings.
 
 #ifndef AUD_SAMPLER_FIXTURE_HPP
 #define AUD_SAMPLER_FIXTURE_HPP
+
+#include <ftw.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <atomic>
@@ -20,7 +27,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <string>
@@ -35,10 +41,10 @@
 
 namespace aud_sampler_test {
 
-inline constexpr double kRate = 48000.0;
-inline constexpr double kPi = 3.14159265358979323846;
+constexpr double kRate = 48000.0;
+constexpr double kPi = 3.14159265358979323846;
 // The frames sfizz reads ahead of a voice: the head of a sample.
-inline constexpr uint32_t kHeadFrames = 8192;
+constexpr uint32_t kHeadFrames = 8192;
 
 // ............................................................................
 // Files
@@ -46,21 +52,44 @@ inline constexpr uint32_t kHeadFrames = 8192;
 // A folder of its own for every test, removed at the end. The start time of
 // the run tells runs apart, the counter the folders of one run.
 struct TempFolder {
-  std::filesystem::path path;
+  // Folders nftw keeps open while it removes the folder.
+  static constexpr int kOpenFolders = 16;
+
+  std::string path;
 
   TempFolder() {
     static const auto run = std::chrono::system_clock::now().time_since_epoch().count();
     static std::atomic<int> next{0};
-    path = std::filesystem::temp_directory_path() /
-           ("aud_sampler_test_" + std::to_string(run) + "_" +
-            std::to_string(next.fetch_add(1)));
-    std::filesystem::create_directories(path);
+    path = temporaryDirectory() + "/aud_sampler_test_" + std::to_string(run) + "_" +
+           std::to_string(next.fetch_add(1));
+    createFolder("");
   }
-  ~TempFolder() {
-    std::error_code ec;
-    std::filesystem::remove_all(path, ec);
+  ~TempFolder() { nftw(path.c_str(), removeEntry, kOpenFolders, FTW_DEPTH | FTW_PHYS); }
+
+  std::string file(const std::string& name) const { return path + "/" + name; }
+
+  // Creates a folder inside, e.g. "instrument/samples", with the folders
+  // above it.
+  void createFolder(const std::string& name) const {
+    const std::string target = name.empty() ? path : file(name);
+    for (size_t slash = target.find('/', 1); slash != std::string::npos;
+         slash = target.find('/', slash + 1)) {
+      mkdir(target.substr(0, slash).c_str(), 0700);
+    }
+    mkdir(target.c_str(), 0700);
   }
-  std::string file(const std::string& name) const { return (path / name).string(); }
+
+  // $TMPDIR, or /tmp without one.
+  static std::string temporaryDirectory() {
+    const char* variable = std::getenv("TMPDIR");
+    std::string directory = variable != nullptr && *variable != '\0' ? variable : "/tmp";
+    while (directory.size() > 1 && directory.back() == '/') directory.pop_back();
+    return directory;
+  }
+
+  static int removeEntry(const char* entry, const struct stat*, int, struct FTW*) {
+    return std::remove(entry);
+  }
 };
 
 // Writes a WAV file of 32-bit floats, interleaved.

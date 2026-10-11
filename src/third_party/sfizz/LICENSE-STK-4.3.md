@@ -1,11 +1,29 @@
 # STK 4.3.0 License
 
-Parts of the Faust-generated code of sfizz under `src/sfizz/gen/filters` and
-`src/sfizz/effects/gen` come from functions of the Faust libraries that are
-licensed under the STK-4.3 license: functions of filters.lib, signals.lib,
-basics.lib, analyzers.lib, compressors.lib, misceffects.lib and noises.lib by
-Julius O. Smith III, and of vaeffects.lib by Eric Tarr. The license, as the
-Faust libraries ship it in `licenses/stk-4.3.0.md`:
+Parts of the Faust-generated code of sfizz under `src/sfizz/gen/filters`,
+`src/sfizz/effects/gen` and `src/sfizz/effects/impl` (`ResonantString`,
+`ResonantStringSSE` and `ResonantStringAVX`, the strings effect) come from
+functions of the Faust libraries that are licensed under the STK-4.3
+license, an MIT-style license. At the commits of faustlibraries that the
+generating Faust versions pin (`127e5bf` for Faust 2.20.2, `cde5c7b` for
+2.30.5, `0dce1a5` for 2.37.3), the libraries declare these copyright notices
+for them:
+
+- Copyright (C) 2003-2019 by Julius O. Smith III <jos@ccrma.stanford.edu>:
+  the functions of filters.lib (`tf22t`, `iir`, `fir`, `dcblockerat`,
+  `zero`, `pole`, `allpass_comb`, `bandpass`, `nlf2`, `wgr`) and
+  `gate_gain_mono` of misceffects.lib
+- Copyright (C) 2003-2017 by Julius O. Smith III <jos@ccrma.stanford.edu>:
+  `smooth` of signals.lib, `tau2pole` of basics.lib, `amp_follower` and
+  `amp_follower_ud` of analyzers.lib, and `pink_filter` of noises.lib
+- Copyright (C) 2014-2020 by Julius O. Smith III <jos@ccrma.stanford.edu>:
+  `compression_gain_mono` of compressors.lib
+
+`sallenKey2ndOrder` of vaeffects.lib names Eric Tarr as its author, `lag_ud`
+of signals.lib and `amp_follower_ar` of analyzers.lib name Jonatan
+Liljedahl; the libraries declare no copyright line of their own for these
+three. The license, as the Faust libraries ship it in
+`licenses/stk-4.3.0.md`:
 
 ---
 

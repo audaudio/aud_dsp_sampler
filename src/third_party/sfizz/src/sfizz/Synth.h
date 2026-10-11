@@ -6,8 +6,9 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
 // load names the samples it could not read, the effects it does not know
-// and the errors of its parser, and the smoothers of the controllers can
-// start from the values a host replayed.
+// and the first errors of its parser; restoreHdcc() sets a controller
+// without its reactions, and the smoothers of the controllers can start
+// from the values a host restored.
 
 #pragma once
 #include "AudioSpan.h"
@@ -182,8 +183,8 @@ public:
      */
     const std::vector<std::string>& getMissingSamples() const noexcept;
     /**
-     * @brief The errors the parser found in the last load, e.g. "piano.sfz at
-     * line 3: ...".
+     * @brief The first errors the parser found in the last load, at most
+     * config::maxParseErrors, e.g. "piano.sfz at line 3: ...".
      */
     const std::vector<std::string>& getParseErrors() const noexcept;
     /**

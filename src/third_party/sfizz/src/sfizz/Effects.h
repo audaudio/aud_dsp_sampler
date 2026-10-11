@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// factory keeps the effect types it did not know since the last clear.
+
 #pragma once
 #include "AudioBuffer.h"
 #include "Defaults.h"

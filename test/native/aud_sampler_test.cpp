@@ -8,6 +8,7 @@
 // registration, loads with their ids, the swap of instruments, the
 // controllers, the messages, the streams and the store with the budget.
 
+#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
@@ -117,7 +118,7 @@ AUD_TEST(loads_an_sfz_text_and_plays_a_note) {
 AUD_TEST(loads_an_sfz_file_and_finds_its_samples_beside_it) {
   Fixture f;
   TempFolder folder;
-  std::filesystem::create_directories(folder.path / "instrument" / "samples");
+  folder.createFolder("instrument/samples");
   writeWav(folder.file("instrument/samples/a.wav"), sine(440, 1.0));
   writeText(folder.file("instrument/piano.sfz"),
             "<control> default_path=samples/\n<region> sample=a.wav pitch_keycenter=69\n");
@@ -326,7 +327,7 @@ AUD_TEST(a_sample_deleted_after_the_load_plays_its_head) {
   const int32_t node = f.sampler();
   AUD_CHECK(f.loadAndWait(node, folder.file("gone.sfz"),
                           sineInstrument(folder, "gone", 375, 2.0)));
-  std::filesystem::remove(folder.path / "gone.wav");
+  std::remove(folder.file("gone.wav").c_str());
   f.renderLive(256);
   const size_t start = f.left.size();
   f.noteOn(node, 69);

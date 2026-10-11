@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// beat numbers, their quantization and the beats per bar of every frame are
+// gone with the metronome, their only reader.
+
 #include "BeatClock.h"
 #include "SIMDHelpers.h"
 #include "Config.h"
@@ -49,22 +53,6 @@ double BBT::toBars(TimeSignature sig) const
 }
 
 ///
-constexpr int BeatClock::resolution;
-
-auto BeatClock::quantize(double beats) -> qbeats_t
-{
-    double d = beats * (1 << resolution);
-    d = std::copysign(0.5 + std::fabs(d), d);
-    return static_cast<qbeats_t>(d);
-}
-
-template <class T>
-T BeatClock::dequantize(qbeats_t qbeats)
-{
-    return qbeats / static_cast<T>(1 << resolution);
-}
-
-///
 void BeatClock::clear()
 {
     beatsPerSecond_ = 2.0;
@@ -94,9 +82,7 @@ void BeatClock::setSampleRate(double sampleRate)
 
 void BeatClock::setSamplesPerBlock(unsigned samplesPerBlock)
 {
-    runningBeatNumber_.resize(samplesPerBlock);
     runningBeatPosition_.resize(samplesPerBlock);
-    runningBeatsPerBar_.resize(samplesPerBlock);
 }
 
 void BeatClock::setTempo(unsigned delay, double secondsPerBeat)
@@ -143,13 +129,6 @@ void BeatClock::setPlaying(unsigned delay, bool playing)
     isPlaying_ = playing;
 }
 
-absl::Span<const int> BeatClock::getRunningBeatNumber()
-{
-    fillBufferUpTo(currentCycleFrames_);
-
-    return absl::MakeConstSpan(runningBeatNumber_.data(), currentCycleFrames_);
-}
-
 absl::Span<const float> BeatClock::getRunningBeatPosition()
 {
     fillBufferUpTo(currentCycleFrames_);
@@ -162,23 +141,12 @@ double BeatClock::getLastBeatPosition() const
     return lastClientPos_.toBeats(timeSig_);
 }
 
-absl::Span<const int> BeatClock::getRunningBeatsPerBar()
-{
-    fillBufferUpTo(currentCycleFrames_);
-
-    return absl::MakeConstSpan(runningBeatsPerBar_.data(), currentCycleFrames_);
-}
-
 void BeatClock::fillBufferUpTo(unsigned delay)
 {
-    int *beatNumberData = runningBeatNumber_.data();
     float *beatNumberPosition = runningBeatPosition_.data();
-    int *beatsPerBarData = runningBeatsPerBar_.data();
     unsigned fillIdx = currentCycleFill_;
 
     const TimeSignature sig = timeSig_;
-    for (unsigned i = fillIdx; i < delay; ++i)
-        beatsPerBarData[i] = sig.beatsPerBar;
 
     BBT clientPos = lastClientPos_;
     const BBT hostPos = lastHostPos_;
@@ -190,8 +158,6 @@ void BeatClock::fillBufferUpTo(unsigned delay)
 
         if (fillIdx < delay) {
             double beats = clientPos.toBeats(sig);
-            // quantization to nearest for prevention of rounding errors
-            fill(absl::MakeSpan(&beatNumberData[fillIdx], delay - fillIdx), dequantize<int>(quantize(beats)));
             fill(absl::MakeSpan(&beatNumberPosition[fillIdx], delay - fillIdx), static_cast<float>(beats));
             fillIdx = delay;
         }
@@ -201,9 +167,7 @@ void BeatClock::fillBufferUpTo(unsigned delay)
             clientPos = mustApplyHostPos ? hostPos : clientPos;
             mustApplyHostPos = false;
 
-            // quantization to nearest for prevention of rounding errors
             double beats = clientPos.toBeats(sig);
-            beatNumberData[fillIdx] = dequantize<int>(quantize(beats));
             beatNumberPosition[fillIdx] = static_cast<float>(beats);
         }
     }

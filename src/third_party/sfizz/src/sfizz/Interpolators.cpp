@@ -4,12 +4,14 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// tables of the interpolators are set once per process.
+
 #include "Interpolators.h"
 
 namespace sfz {
 
-// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
-// tables are set once per process. Every synth asks for them, also on a
+// The tables are set once per process: every synth asks for them, also on a
 // worker thread while other synths render and read them.
 void initializeInterpolators()
 {

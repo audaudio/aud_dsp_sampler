@@ -60,7 +60,6 @@ using FileAudioBufferPtr = std::shared_ptr<FileAudioBuffer>;
 
 struct FileInformation {
     int64_t end { Default::sampleEnd };
-    int64_t maxOffset { 0 };
     int64_t loopStart { Default::loopStart };
     int64_t loopEnd { Default::loopEnd };
     bool hasLoop { false };
@@ -227,7 +226,9 @@ public:
 private:
     SampleStore() = default;
     static void streamTask(void* user);
-    void changed(const FileHost& host, int64_t delta) noexcept;
+    // Takes the host by value: a stream reports its bytes before its status
+    // lets a trim free the file that holds the host.
+    void changed(FileHost host, int64_t delta) noexcept;
 
     std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<FileData>> files_;
@@ -257,8 +258,8 @@ public:
 
     /**
      * @brief The host of the synth (ticket 25): the worker of the streaming
-     * reads and the account of the bytes. Without one the pool reads whole
-     * files at once.
+     * reads and the account of the bytes. Without one, or with one that
+     * cannot post, the pool reads whole files at once. Set it before a load.
      */
     void setHost(const FileHost& host) noexcept { host_ = host; }
 
@@ -291,16 +292,7 @@ public:
     FileDataHolder getFilePromise(const std::shared_ptr<FileId>& fileId) noexcept;
     void setPreloadSize(uint32_t preloadSize) noexcept { this->preloadSize = preloadSize; }
     uint32_t getPreloadSize() const noexcept { return preloadSize; }
-    void emptyFileLoadingQueues() noexcept {}
-    /**
-     * @brief The streams of the store run as tasks of the engine; an offline
-     * render waits for them between its blocks, so there is nothing to wait
-     * for here.
-     */
-    void waitForBackgroundLoading() noexcept {}
     void setRamLoading(bool loadInRam) noexcept { this->loadInRam = loadInRam; }
-    /** The engine's budget frees memory now; nothing collects on a timer. */
-    void triggerGarbageCollection() noexcept {}
 
     /** [realtime] Asks the store again for the whole file of a voice. */
     void requestStream(FileData& data) noexcept

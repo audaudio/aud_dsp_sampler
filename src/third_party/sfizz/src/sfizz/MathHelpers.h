@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): i0()
+// is a power series of its own instead of the function of cephes, whose
+// license was a permission e-mail, and gives every platform the same values;
+// the state of fast_rand is atomic.
+
 /**
  * @file MathHelpers.h
  * @brief Contains math helper functions and math constants
@@ -30,9 +35,7 @@
 // The modified Bessel function of the first kind and order 0 by its power
 // series I0(x) = sum over k of ((x/2)^k / k!)^2 (Abramowitz and Stegun,
 // 9.6.12), which converges for every x; the Kaiser windows of the sinc
-// interpolator ask for arguments up to a few dozen. Modified by Audanika for
-// aud_dsp_sampler (ticket 25): replaces the function of cephes, whose
-// license was a permission e-mail, and gives every platform the same values.
+// interpolator ask for arguments up to a few dozen.
 static double i0(double x)
 {
     const double half = 0.5 * x;
@@ -634,10 +637,9 @@ private:
 /**
  * @brief A low-quality random number generator guaranteed to be very fast
  *
- * Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
- * state is atomic. The generator below is global, and synths are built on
- * worker threads while others render; draws at the same time may repeat a
- * number, but they do not race.
+ * The state is atomic: Random::randomGenerator below exists once per
+ * translation unit, and synths are built on worker threads while others
+ * render; draws at the same time may repeat a number, but they do not race.
  */
 class fast_rand {
 public:

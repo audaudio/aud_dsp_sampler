@@ -5,12 +5,12 @@
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
-// load reports its progress and can be cancelled, names the samples it
-// could not read, the effects it does not know and the errors of its parser
-// instead of printing them,
-// controllers can be restored without their reactions and their smoothers
-// start from the restored values, and the
-// metronome is gone.
+// load reports its progress and can be cancelled, and names the samples it
+// could not read, the effects it does not know and the first errors of its
+// parser instead of printing them; controllers can be restored without
+// their reactions, and their smoothers start from the restored values. The
+// metronome is gone, and with the file pool's own threads the calls that
+// waited for them and the timer of their garbage collection.
 
 #include "SynthPrivate.h"
 #include "Config.h"
@@ -46,7 +46,6 @@
 #include <absl/types/optional.h>
 #include <absl/types/span.h>
 #include <algorithm>
-#include <chrono>
 #include <iostream>
 #include <random>
 #include <utility>
@@ -92,7 +91,6 @@ Synth::Impl::Impl()
 Synth::Impl::~Impl()
 {
     voiceManager_.reset();
-    resources_.getFilePool().emptyFileLoadingQueues();
 }
 
 void Synth::Impl::onParseFullBlock(const std::string& header, const std::vector<Opcode>& members)
@@ -148,10 +146,14 @@ void Synth::Impl::onParseFullBlock(const std::string& header, const std::vector<
     }
 }
 
-// The errors of a load go to its owner instead of stderr (aud_dsp_sampler,
-// ticket 25); the warnings are dropped.
+// The first errors of a load go to its owner instead of stderr
+// (aud_dsp_sampler, ticket 25); the warnings and the errors beyond
+// config::maxParseErrors are dropped: a large file that is no SFZ text has
+// an error on nearly every line.
 void Synth::Impl::onParseError(const SourceRange& range, const std::string& message)
 {
+    if (parseErrors_.size() >= config::maxParseErrors)
+        return;
     const auto relativePath = range.start.filePath->lexically_relative(parser_.originalDirectory());
     parseErrors_.push_back(relativePath.string() + " at line " +
         std::to_string(range.start.lineNumber + 1) + ": " + message);
@@ -276,9 +278,6 @@ void Synth::Impl::clear()
     missingSamples_.clear();
     parseErrors_.clear();
     effectFactory_.clearUnsupportedTypes();
-
-    // Clear the background queues before removing everyone
-    filePool.waitForBackgroundLoading();
 
     voiceManager_.reset();
     for (auto& list : lastKeyswitchLists_)
@@ -633,10 +632,8 @@ void Synth::Impl::prepareSfzLoad(const fs::path& path)
 
     if (!reloading) {
 
-        // Clear the background queues and clear the filePool
-        auto& filePool = resources_.getFilePool();
-        filePool.waitForBackgroundLoading();
-        filePool.clear();
+        // Clear the filePool
+        resources_.getFilePool().clear();
 
         // Set the default hdcc to their default
         resetDefaultCCValues();
@@ -1143,21 +1140,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
         return;
     }
 
-    const SynthConfig& synthConfig = impl.resources_.getSynthConfig();
-    FilePool& filePool = impl.resources_.getFilePool();
     BufferPool& bufferPool = impl.resources_.getBufferPool();
-
-    if (synthConfig.freeWheeling)
-        filePool.waitForBackgroundLoading();
-
-    const auto now = highResNow();
-    const auto timeSinceLastCollection =
-        std::chrono::duration_cast<std::chrono::seconds>(now - impl.lastGarbageCollection_);
-
-    if (timeSinceLastCollection.count() > config::fileClearingPeriod) {
-        impl.lastGarbageCollection_ = now;
-        filePool.triggerGarbageCollection();
-    }
 
     auto tempSpan = bufferPool.getStereoBuffer(numFrames);
     auto tempMixSpan = bufferPool.getStereoBuffer(numFrames);

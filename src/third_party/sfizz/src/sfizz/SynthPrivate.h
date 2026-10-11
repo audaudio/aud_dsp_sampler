@@ -1,5 +1,6 @@
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
-// synth keeps the samples and the parser errors of its last load.
+// synth keeps the samples and the first parser errors of its last load; the
+// time of the file pool's garbage collection is gone with it.
 
 #pragma once
 
@@ -337,7 +338,8 @@ struct Synth::Impl final: public Parser::Listener {
     std::string rootPath_;
 
     // The samples of regions the last load dropped because it could not
-    // read them, and the errors of its parser (aud_dsp_sampler, ticket 25).
+    // read them, and the first errors of its parser (aud_dsp_sampler,
+    // ticket 25).
     std::vector<std::string> missingSamples_;
     std::vector<std::string> parseErrors_;
 
@@ -371,8 +373,6 @@ struct Synth::Impl final: public Parser::Listener {
 
     CallbackBreakdown callbackBreakdown_;
     double dispatchDuration_ { 0 };
-
-    std::chrono::time_point<std::chrono::high_resolution_clock> lastGarbageCollection_;
 
     Parser parser_;
     std::string lastPath_;

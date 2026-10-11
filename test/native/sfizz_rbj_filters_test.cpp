@@ -102,6 +102,8 @@ constexpr double kMagnitudeFloor = 1e-7;
 // The largest deviation of an impulse response from the difference
 // equation, relative to its largest sample.
 constexpr double kImpulseTolerance = 1e-6;
+// The frames of the noise and the renders against the originals.
+constexpr int kFrames = 24000;
 
 bool operator==(const Settings& a, const Settings& b) {
   return a.cutoff == b.cutoff && a.resonance == b.resonance && a.gain == b.gain &&
@@ -136,15 +138,32 @@ void prepare(Dsp& dsp, const Settings& s) {
 // Parameters
 
 // The parameters of a filter of kind K; those it lacks read as the defaults.
-template <Kind K, class F>
-Settings parametersOf(const F& f) {
-  Settings s = kDefaults;
-  s.cutoff = f.getCutoff();
-  if constexpr (K != Kind::Eq) s.resonance = f.getResonance();
-  if constexpr (K != Kind::Resonant) s.gain = f.getPeakShelfGain();
-  if constexpr (K == Kind::Eq) s.bandwidth = f.getBandwidth();
-  return s;
-}
+template <Kind K>
+struct Parameters;
+
+template <>
+struct Parameters<Kind::Resonant> {
+  template <class F>
+  static Settings of(const F& f) {
+    return {f.getCutoff(), f.getResonance(), kDefaults.gain, kDefaults.bandwidth};
+  }
+};
+
+template <>
+struct Parameters<Kind::PeakShelf> {
+  template <class F>
+  static Settings of(const F& f) {
+    return {f.getCutoff(), f.getResonance(), f.getPeakShelfGain(), kDefaults.bandwidth};
+  }
+};
+
+template <>
+struct Parameters<Kind::Eq> {
+  template <class F>
+  static Settings of(const F& f) {
+    return {f.getCutoff(), kDefaults.resonance, f.getPeakShelfGain(), f.getBandwidth()};
+  }
+};
 
 // What a filter of kind K keeps of s.
 template <Kind K>
@@ -162,11 +181,11 @@ void checkParameters() {
   const Settings set{1234.5f, -7.25f, 3.5f, 0.75f};
   F f;
   f.init(48000);
-  AUD_CHECK(parametersOf<K>(f) == kDefaults);
+  AUD_CHECK(Parameters<K>::of(f) == kDefaults);
   configure(f, set);
-  AUD_CHECK(parametersOf<K>(f) == keptOf<K>(set));
+  AUD_CHECK(Parameters<K>::of(f) == keptOf<K>(set));
   f.init(44100);
-  AUD_CHECK(parametersOf<K>(f) == kDefaults);
+  AUD_CHECK(Parameters<K>::of(f) == kDefaults);
 }
 
 // ............................................................................
@@ -295,31 +314,32 @@ void checkMagnitudes(const Design& d, int channels) {
   constexpr int kSampleRate = 48000;
   constexpr int kSettle = kSampleRate / 2;
   constexpr int kWindow = kSampleRate / 5;  // whole periods of multiples of 5 Hz
-  constexpr int kFrames = kSettle + kWindow;
+  constexpr int kSignalFrames = kSettle + kWindow;
   constexpr int kBlock = 512;
   const double probes[] = {20,   50,   100,  200,   315,   500,   800,   1250,
                            2000, 3150, 5000, 8000, 10000, 12500, 16000, 20000};
   const Settings settings[] = {{250, 0, 12, 1}, {2000, 9, -18, 0.5f}, {10000, -3, 6, 2}};
   const float amplitudes[2] = {0.5f, -0.25f};
 
-  std::vector<float> buffers[2] = {std::vector<float>(kFrames), std::vector<float>(kFrames)};
+  std::vector<float> buffers[2] = {std::vector<float>(kSignalFrames),
+                                   std::vector<float>(kSignalFrames)};
   for (bool smoothing : {false, true}) {
     for (const Settings& s : settings) {
       std::vector<double> frequencies(std::begin(probes), std::end(probes));
       frequencies.push_back(s.cutoff);
       for (double frequency : frequencies) {
         const double w = 2.0 * kPi * frequency / kSampleRate;
-        const std::vector<float>& x = sine(w, kFrames);
+        const std::vector<float>& x = sine(w, kSignalFrames);
         for (int ch = 0; ch < channels; ++ch) {
-          for (int i = 0; i < kFrames; ++i) buffers[ch][i] = amplitudes[ch] * x[i];
+          for (int i = 0; i < kSignalFrames; ++i) buffers[ch][i] = amplitudes[ch] * x[i];
         }
         F f;
         f.init(kSampleRate);
         f.setSmoothingEnabled(smoothing);
         configure(f, s);
-        for (int i = 0; i < kFrames; i += kBlock) {
+        for (int i = 0; i < kSignalFrames; i += kBlock) {
           float* io[2] = {buffers[0].data() + i, buffers[1].data() + i};
-          f.compute(std::min(kBlock, kFrames - i), io, io);
+          f.compute(std::min(kBlock, kSignalFrames - i), io, io);
         }
         const double expected = cookbookMagnitude(d, reference(d, s, kSampleRate), w);
         for (int ch = 0; ch < channels; ++ch) {
@@ -426,6 +446,49 @@ void checkImpulses(const Design& d, int channels) {
 }
 
 // ............................................................................
+// Sample rates below 40.8 kHz
+
+// White noise in [-0.5, 0.5).
+std::vector<float> noise(uint32_t seed) {
+  std::vector<float> x(kFrames);
+  for (float& v : x) {
+    seed ^= seed << 13;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    v = static_cast<float>(seed / 4294967296.0 - 0.5);
+  }
+  return x;
+}
+
+// Noise through F at `sampleRate` with `cutoff`, a resonance of 12 dB, a
+// gain of 6 dB and a bandwidth of an octave, in 1 or 2 channels.
+template <class F>
+std::vector<float> filteredNoise(int channels, int sampleRate, float cutoff) {
+  std::vector<float> buffers[2] = {noise(0x2545F491u), noise(0x9E3779B9u)};
+  F f;
+  f.init(sampleRate);
+  configure(f, {cutoff, 12, 6, 1});
+  float* io[2] = {buffers[0].data(), buffers[1].data()};
+  f.compute(kFrames, io, io);
+  std::vector<float> output = buffers[0];
+  if (channels == 2) output.insert(output.end(), buffers[1].begin(), buffers[1].end());
+  return output;
+}
+
+// A cutoff at or above Nyquist, e.g. 20 kHz at 24 kHz, where the formulas
+// turn unstable, acts as the highest cutoff below it: the output stays
+// finite and equals that cutoff's.
+template <class F>
+void checkCutoffAboveNyquist(int channels) {
+  for (int sampleRate : {16000, 24000, 32000}) {
+    const float limit = static_cast<float>(sfz::rbj::kMaxCutoffPerSampleRate * sampleRate);
+    const std::vector<float> above = filteredNoise<F>(channels, sampleRate, 20000.0f);
+    AUD_CHECK(std::all_of(above.begin(), above.end(), [](float v) { return std::isfinite(v); }));
+    AUD_CHECK(above == filteredNoise<F>(channels, sampleRate, limit));
+  }
+}
+
+// ............................................................................
 // Originals
 
 #if HAVE_ORIGINALS
@@ -440,7 +503,6 @@ struct Scenario {
   std::vector<Change> changes;  // the first one at frame 0
 };
 
-constexpr int kFrames = 24000;
 // The largest difference of the output from the original's.
 constexpr double kOriginalTolerance = 1e-5;
 // The largest output of the original the inputs are scaled down to, so that
@@ -490,18 +552,6 @@ std::vector<Scenario> scenarios() {
 
 using Signal = std::vector<std::vector<float>>;  // channels of kFrames
 
-// White noise in [-0.5, 0.5).
-std::vector<float> noise(uint32_t seed) {
-  std::vector<float> x(kFrames);
-  for (float& v : x) {
-    seed ^= seed << 13;
-    seed ^= seed >> 17;
-    seed ^= seed << 5;
-    v = static_cast<float>(seed / 4294967296.0 - 0.5);
-  }
-  return x;
-}
-
 // An exponential sweep from 20 Hz to 20 kHz with an amplitude of 0.5.
 std::vector<float> sweep(int sampleRate) {
   std::vector<float> x(kFrames);
@@ -515,6 +565,7 @@ std::vector<float> sweep(int sampleRate) {
 }
 
 const int kBlocks[] = {64, 0, 1, 17, 256, 5, 128, 33, 512, 2};
+constexpr int kNumBlocks = sizeof(kBlocks) / sizeof(kBlocks[0]);
 
 // Runs `dsp` over `input` scaled by `gain`, in blocks of varying sizes, and
 // applies the changes of the scenario at their frames. In place, the input
@@ -539,7 +590,7 @@ Signal render(Dsp& dsp, const Scenario& sc, const Signal& input, double gain, bo
     while (next < sc.changes.size() && sc.changes[next].frame <= frame) {
       configure(dsp, sc.changes[next++].settings);
     }
-    int count = std::min(kBlocks[b % std::size(kBlocks)], kFrames - frame);
+    int count = std::min(kBlocks[b % kNumBlocks], kFrames - frame);
     if (next < sc.changes.size()) count = std::min(count, sc.changes[next].frame - frame);
 
     const float* in[2] = {};
@@ -637,6 +688,10 @@ void compareWithOriginal() {
     const Design design{Shape::shape, sections, Kind::kind}; \
     checkImpulses<sfz##name>(design, 1);                     \
     checkImpulses<sfz2ch##name>(design, 2);                  \
+  }                                                          \
+  AUD_TEST(rbj_##name##_stays_finite_above_nyquist) {        \
+    checkCutoffAboveNyquist<sfz##name>(1);                   \
+    checkCutoffAboveNyquist<sfz2ch##name>(2);                \
   }
 RBJ_FILTERS(RBJ_TESTS)
 #undef RBJ_TESTS

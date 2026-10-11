@@ -29,8 +29,21 @@
 - Add per-filter RBJ tests and a stricter native harness
 
 - RBJ filter tests: one test per filter and aspect, checked with AUD_CHECK and AUD_CHECK_NEAR, silent when they pass, in the repo's 2-space style with // .... landmarks
+
 - scripts/test-native.js refuses unknown options and --only values with the usage and exit code 2, passes the pristine sfizz path as an escaped C string and prunes the objects and binaries of earlier runs
+
 - WorkerHold holds every worker of the engine and checks each post
+
+- Add safe streams, refused headers and notices to the fork
+
+- A stream reports its bytes before its status lets a trim free the file; the store's report takes the host by value
+- A sample with more frames than a voice counts or more channels than sfizz plays is refused, by the load and by the stream; buffers sized from a header allocate without throwing, so a load drops the sample and a stream leaves the voices on the head instead of ending the process
+- A pool without a host reads whole files at once
+- ScopedFTZ restores the control register on ARM; the RBJ filters keep the cutoff below Nyquist; a load keeps the first 16 errors of its parser
+- Dead code gone: RTSemaphore, SpinMutex, threadpool and atomic_queue with their SOURCES, INCLUDES and NOTICES lines, the fverb opcode specs, the pool's empty stubs and the garbage collection timer, FileInformation::maxOffset, two config constants, the beat clock buffers only the metronome read
+- The Modified by Audanika notes below the license headers in one form, also in Effects.h and the other files changed now
+- NOTICES: RbjFilters.hpp as Audanika's MIT code apart from sfizz, the strings effect under STK-4.3, decisions license-002 and license-003, the exempt helpers; LICENSE-STK-4.3.md with the copyright notices of the Faust library functions
+- The native tests of the fork compile as gnu++14 like the fork, the fixture in both language versions; tests for the order of a stream, streams while trims run, refused and oversized headers, pools without a host, flush-to-zero, parse errors and cutoffs above Nyquist
 
 ## 0.1.0 - 2026-10-08
 

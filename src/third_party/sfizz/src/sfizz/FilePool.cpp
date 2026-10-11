@@ -25,7 +25,10 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
 // store of the process, the pools as references into it, the streams as
-// tasks of the engine and the trims of its budget; see FilePool.h.
+// tasks of the engine and the trims of its budget; see FilePool.h. A sample
+// whose header claims more frames than sfizz counts, or than memory holds,
+// is refused or left to its head instead of ending the process, and a pool
+// without a host reads whole files at once.
 
 #include "FilePool.h"
 #include "AudioReader.h"
@@ -38,6 +41,8 @@
 #include <absl/strings/match.h>
 #include <algorithm>
 #include <chrono>
+#include <limits>
+#include <new>
 #include <system_error>
 
 namespace {
@@ -48,49 +53,81 @@ int64_t nowNs() noexcept
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-void readBaseFile(sfz::AudioReader& reader, sfz::FileAudioBuffer& output, uint32_t numFrames)
+// Whether sfizz plays the file of a reader: mono or stereo, with no more
+// frames than a voice counts in an int. A longer file, e.g. a header that
+// claims a 36-bit length, is refused before anything is allocated for it
+// (aud_dsp_sampler, ticket 25).
+bool playable(sfz::AudioReader& reader) noexcept
 {
-    output.reset();
-    output.resize(numFrames);
-
     const unsigned channels = reader.channels();
-
-    if (channels == 1) {
-        output.addChannel();
-        output.clear();
-        reader.readNextBlock(output.channelWriter(0), numFrames);
-    } else if (channels == 2) {
-        output.addChannel();
-        output.addChannel();
-        output.clear();
-        sfz::Buffer<float> tempReadBuffer { 2 * numFrames };
-        reader.readNextBlock(tempReadBuffer.data(), numFrames);
-        sfz::readInterleaved(tempReadBuffer, output.getSpan(0), output.getSpan(1));
-    }
+    const int64_t frames = reader.frames();
+    return (channels == 1 || channels == 2) && frames >= 0 &&
+        frames <= std::numeric_limits<int>::max();
 }
 
-sfz::FileAudioBuffer readFromFile(sfz::AudioReader& reader, uint32_t numFrames)
+// Gives `output` `numChannels` channels of `numFrames` frames, which sfizz's
+// buffers allocate zeroed. The sizes come from the header of a file, which
+// may claim more than memory holds: false, and `output` empty, when the
+// memory is not there, so that neither a load nor a stream ends the process
+// (aud_dsp_sampler, ticket 25).
+bool allocateFrames(sfz::FileAudioBuffer& output, size_t numChannels, size_t numFrames) noexcept
 {
-    sfz::FileAudioBuffer baseBuffer;
-    readBaseFile(reader, baseBuffer, numFrames);
-    return baseBuffer;
+    output.reset();
+    try {
+        output.addChannels(numChannels);
+    } catch (const std::bad_alloc&) {
+        output.reset();
+        return false;
+    }
+    if (!output.resize(numFrames, std::nothrow)) {
+        output.reset();
+        return false;
+    }
+    return true;
+}
+
+// Reads the first `numFrames` frames of a file; false when sfizz does not
+// play it or the memory for the frames is not there.
+bool readBaseFile(sfz::AudioReader& reader, sfz::FileAudioBuffer& output, uint32_t numFrames)
+{
+    const unsigned channels = reader.channels();
+    if (!playable(reader) || !allocateFrames(output, channels, numFrames))
+        return false;
+
+    if (channels == 1) {
+        reader.readNextBlock(output.channelWriter(0), numFrames);
+        return true;
+    }
+
+    sfz::Buffer<float> tempReadBuffer;
+    if (!tempReadBuffer.resize(2 * static_cast<size_t>(numFrames), std::nothrow)) {
+        output.reset();
+        return false;
+    }
+    reader.readNextBlock(tempReadBuffer.data(), numFrames);
+    sfz::readInterleaved(tempReadBuffer, output.getSpan(0), output.getSpan(1));
+    return true;
 }
 
 // Reads the whole file in chunks; `filledFrames` counts what can be read.
 // The buffer is allocated before the first frame counts, so a reader that
-// sees a count past the head reads frames that are there.
-void streamFromFile(sfz::AudioReader& reader, sfz::FileAudioBuffer& output, std::atomic<size_t>* filledFrames)
+// sees a count past the head reads frames that are there. False, with no
+// frame counted, when sfizz does not play the file - it may have changed
+// since the load checked it - or the memory for it is not there.
+bool streamFromFile(sfz::AudioReader& reader, sfz::FileAudioBuffer& output, std::atomic<size_t>* filledFrames)
 {
     const auto numFrames = static_cast<size_t>(reader.frames());
     const auto numChannels = reader.channels();
     const auto chunkSize = static_cast<size_t>(sfz::config::fileChunkSize);
 
-    output.reset();
-    output.addChannels(reader.channels());
-    output.resize(numFrames);
-    output.clear();
+    if (!playable(reader) || !allocateFrames(output, numChannels, numFrames))
+        return false;
 
-    sfz::Buffer<float> fileBlock { chunkSize * numChannels };
+    sfz::Buffer<float> fileBlock;
+    if (!fileBlock.resize(chunkSize * numChannels, std::nothrow)) {
+        output.reset();
+        return false;
+    }
     size_t inputFrameCounter { 0 };
     size_t outputFrameCounter { 0 };
     bool inputEof = false;
@@ -120,13 +157,14 @@ void streamFromFile(sfz::AudioReader& reader, sfz::FileAudioBuffer& output, std:
         if (filledFrames != nullptr)
             filledFrames->fetch_add(outputChunkSize);
     }
+    return true;
 }
 
 absl::optional<sfz::FileInformation> getReaderInformation(sfz::AudioReader* reader) noexcept
 {
-    const unsigned channels = reader->channels();
-    if (channels != 1 && channels != 2)
+    if (!playable(*reader))
         return {};
+    const unsigned channels = reader->channels();
 
     sfz::FileInformation returnedValue;
     returnedValue.end = static_cast<uint32_t>(reader->frames()) - 1;
@@ -264,7 +302,8 @@ std::shared_ptr<FileData> SampleStore::acquire(const fs::path& file, bool revers
 
     auto data = std::make_shared<FileData>();
     data->information = *info;
-    data->preloadedData = readFromFile(*reader, toLoad);
+    if (!readBaseFile(*reader, data->preloadedData, toLoad))
+        return nullptr;
     data->fullyLoaded = toLoad >= total;
     data->path = file;
     data->reverse = reverse;
@@ -310,7 +349,9 @@ bool SampleStore::requestStream(FileData& data, const FileHost& host) noexcept
 }
 
 // [offline] Streams a queued file. The store keeps the file while it is
-// queued or streams: a trim leaves those alone.
+// queued or streams: a trim leaves those alone. The status is the task's
+// last access to the file: once it reads Done or Preloaded, a trim may free
+// the stream, and the whole file when no pool holds it.
 void SampleStore::streamTask(void* user)
 {
     FileData& data = *static_cast<FileData*>(user);
@@ -319,17 +360,20 @@ void SampleStore::streamTask(void* user)
         return;
     std::error_code ec;
     AudioReaderPtr reader = createAudioReader(data.path, data.reverse, &ec);
-    if (ec || !reader) {
+    if (ec || !reader || !streamFromFile(*reader, data.fileData, &data.availableFrames)) {
+        // The file cannot be read, e.g. it was deleted after the load, or it
+        // does not fit into memory: the voices play its head and ask no more.
         data.unreadable = true;
         data.status = FileData::Status::Preloaded;
         return;
     }
-    streamFromFile(*reader, data.fileData, &data.availableFrames);
+    const FileHost host = data.streamHost;
+    const auto bytes = static_cast<int64_t>(data.streamBytes());
+    get().changed(host, bytes);
     data.status = FileData::Status::Done;
-    get().changed(data.streamHost, static_cast<int64_t>(data.streamBytes()));
 }
 
-void SampleStore::changed(const FileHost& host, int64_t delta) noexcept
+void SampleStore::changed(FileHost host, int64_t delta) noexcept
 {
     bytes_ += delta;
     if (host.bytesChanged != nullptr)
@@ -531,8 +575,9 @@ bool FilePool::preloadFile(const FileId& fileId, uint32_t maxOffset) noexcept
         return true;
     }
 
-    // 0 asks the store for the whole file.
-    const uint32_t frames = loadInRam ? 0 : maxOffset + preloadSize;
+    // 0 asks the store for the whole file: in RAM mode, and without a host
+    // whose worker would stream the rest.
+    const uint32_t frames = (loadInRam || host_.post == nullptr) ? 0 : maxOffset + preloadSize;
     const auto existing = preloadedFiles.find(fileId);
     if (existing != preloadedFiles.end()) {
         const FileData& data = *existing->second.data;
@@ -587,7 +632,8 @@ FileDataHolder FilePool::loadFromRam(const FileId& fileId, const std::vector<cha
     const auto frames = static_cast<uint32_t>(reader->frames());
     auto file = std::make_shared<FileData>();
     file->information = *fileInformation;
-    file->preloadedData = readFromFile(*reader, frames);
+    if (!readBaseFile(*reader, file->preloadedData, frames))
+        return {};
     file->fullyLoaded = true;
     file->status = FileData::Status::Preloaded;
     Reference& reference = loadedFiles[fileId];

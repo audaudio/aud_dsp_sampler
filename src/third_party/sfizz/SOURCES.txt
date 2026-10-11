@@ -60,7 +60,6 @@ src/sfizz/OpcodeCleanup.cpp
 src/sfizz/Panning.cpp
 src/sfizz/PolyphonyGroup.cpp
 src/sfizz/PowerFollower.cpp
-src/sfizz/RTSemaphore.cpp
 src/sfizz/Region.cpp
 src/sfizz/RegionSet.cpp
 src/sfizz/RegionStateful.cpp
@@ -110,4 +109,3 @@ src/sfizz/parser/Parser.cpp
 src/sfizz/parser/ParserPrivate.cpp
 src/sfizz/sfizz_wrapper.cpp
 src/sfizz/simd/HelpersSSE.cpp
-src/sfizz/utility/spin_mutex/SpinMutex.cpp
