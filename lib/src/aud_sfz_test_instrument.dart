@@ -24,11 +24,16 @@ import 'aud_sfz_preset.dart';
 /// graph.createNode(AudSfzSampler.typeId, preset: instrument.preset());
 /// ```
 class AudSfzTestInstrument {
+  /// Creates the instrument that [directory] holds, with its SFZ file at
+  /// [sfzPath]; [AudSfzTestInstrument.write] writes the files first.
   AudSfzTestInstrument._(this.directory, this.sfzPath);
 
-  /// Writes the samples and the SFZ file into [directory], which it creates;
-  /// returns the instrument. Writing again gives the same files.
-  static AudSfzTestInstrument write(String directory) {
+  /// Writes the samples and the SFZ file into [directory], which it creates,
+  /// and returns the instrument. Writing again gives the same files.
+  ///
+  /// - [directory] the folder of the SFZ file; the samples go into its
+  ///   folder `samples/`
+  factory AudSfzTestInstrument.write(String directory) {
     final samples = Directory('$directory/samples')
       ..createSync(recursive: true);
     for (final key in rootKeys) {
@@ -38,6 +43,31 @@ class AudSfzTestInstrument {
     File(sfzPath).writeAsStringSync(sfz);
     return AudSfzTestInstrument._(directory, sfzPath);
   }
+
+  // ...........................................................................
+  /// A preset of the sampler that loads the instrument; a parameter left
+  /// out keeps the default of the node, as in [AudSfzPreset.file].
+  ///
+  /// - [name] the name of the preset
+  /// - [volume] the output gain in dB, -60 to +6
+  /// - [polyphony] the voices, 1 to 256
+  AudNodePreset preset({
+    String name = 'Test instrument',
+    double? volume,
+    int? polyphony,
+  }) => AudSfzPreset.file(
+    sfzPath,
+    name: name,
+    volume: volume,
+    polyphony: polyphony,
+  );
+
+  // ...........................................................................
+  /// The directory the instrument was written to.
+  final String directory;
+
+  /// The path of its SFZ file.
+  final String sfzPath;
 
   // ...........................................................................
   /// The name of the SFZ file in the directory.
@@ -55,7 +85,7 @@ class AudSfzTestInstrument {
   /// The frequency of the sample on [key]: the frequency of the key in
   /// equal temperament rounded to whole hertz, so that one second holds a
   /// whole number of periods and the loop has no seam. Its key plays it
-  /// at most 4 cents off.
+  /// at most 11 cents off, on C2: 65 Hz for 65.41 Hz.
   static int frequencyOf(int key) =>
       (440 * math.pow(2, (key - 69) / 12)).round();
 
@@ -125,24 +155,4 @@ class AudSfzTestInstrument {
     }
     return data.buffer.asUint8List();
   }
-
-  // ...........................................................................
-  /// The directory the instrument was written to.
-  final String directory;
-
-  /// The path of its SFZ file.
-  final String sfzPath;
-
-  /// A preset of the sampler that loads the instrument, with the parameters
-  /// of [AudSfzPreset.file].
-  AudNodePreset preset({
-    String name = 'Test instrument',
-    double? volume,
-    int? polyphony,
-  }) => AudSfzPreset.file(
-    sfzPath,
-    name: name,
-    volume: volume,
-    polyphony: polyphony,
-  );
 }

@@ -69,11 +69,23 @@
 - Add local test closures and structural asserts
 
 - The helpers of the Dart tests are closures in the files that use them; test/support is gone
+
 - The golden renders moved into the test of the test instrument they render
+
 - The store test expects at least the files and bytes of its instrument, since the suites of dart test share the store of the process
+
 - One test per member of the link hook and per root key; the C indices, the WAV header and the error of two tunings compared whole
+
 - The link hook names its library in samplerLibrary; a test checks its members against the @RecordUse members of AudDspSampler
+
 - The native harness test runs every test and needs each build to pass all the tests it ran
+
+- Add parameter docs and a factory to the test instrument
+
+- AudSfzTestInstrument.write is a factory constructor, called as before; the private constructor has its doc, the members follow the code guide order
+- The rounded sample frequency plays at most 11 cents off, on C2, not 4
+- Every named parameter of AudSfzPreset.file, AudSfzPreset.text and AudSfzTestInstrument.preset is documented
+- useSampler of the example has a doc comment
 
 ## 0.1.0 - 2026-10-08
 

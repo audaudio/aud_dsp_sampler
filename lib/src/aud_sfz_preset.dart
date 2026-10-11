@@ -19,7 +19,25 @@ import 'aud_sfz_sampler.dart';
 /// ```
 abstract final class AudSfzPreset {
   /// A preset that loads the SFZ [file]: a path, or `asset:<id>` in a graph
-  /// document whose assets name the file.
+  /// document whose assets name the file. A parameter left out keeps the
+  /// default of the node; giving both [scalaFile] and [scalaText] throws an
+  /// [ArgumentError].
+  ///
+  /// - [file] the path of the SFZ file, or `asset:<id>`
+  /// - [name] the name of the preset
+  /// - [volume] the output gain in dB, -60 to +6 ([AudSfzSampler.volume])
+  /// - [polyphony] the voices, 1 to 256 ([AudSfzSampler.polyphony])
+  /// - [sampleQuality] sfizz's interpolation quality while it renders live,
+  ///   0 to 10 ([AudSfzSampler.sampleQuality])
+  /// - [oscillatorQuality] the quality of sfizz's oscillators while it
+  ///   renders live, 0 to 3 ([AudSfzSampler.oscillatorQuality])
+  /// - [tuningFrequency] the frequency of A4 in Hz, 400 to 480
+  ///   ([AudSfzSampler.tuningFrequency])
+  /// - [stretchTuning] the piano stretch, 0 to 1
+  ///   ([AudSfzSampler.stretchTuning])
+  /// - [scalaFile] a Scala tuning file that loads with the instrument: a
+  ///   path, or `asset:<id>`
+  /// - [scalaText] a Scala tuning given as text, instead of [scalaFile]
   static AudNodePreset file(
     String file, {
     String name = '',
@@ -45,7 +63,26 @@ abstract final class AudSfzPreset {
   );
 
   /// A preset that loads the SFZ [text] whose samples resolve against
-  /// [virtualPath], e.g. the path the text would have as a file.
+  /// [virtualPath], e.g. the path the text would have as a file. A parameter
+  /// left out keeps the default of the node; giving both [scalaFile] and
+  /// [scalaText] throws an [ArgumentError].
+  ///
+  /// - [text] the SFZ text of the instrument
+  /// - [virtualPath] the path the samples of [text] resolve against
+  /// - [name] the name of the preset
+  /// - [volume] the output gain in dB, -60 to +6 ([AudSfzSampler.volume])
+  /// - [polyphony] the voices, 1 to 256 ([AudSfzSampler.polyphony])
+  /// - [sampleQuality] sfizz's interpolation quality while it renders live,
+  ///   0 to 10 ([AudSfzSampler.sampleQuality])
+  /// - [oscillatorQuality] the quality of sfizz's oscillators while it
+  ///   renders live, 0 to 3 ([AudSfzSampler.oscillatorQuality])
+  /// - [tuningFrequency] the frequency of A4 in Hz, 400 to 480
+  ///   ([AudSfzSampler.tuningFrequency])
+  /// - [stretchTuning] the piano stretch, 0 to 1
+  ///   ([AudSfzSampler.stretchTuning])
+  /// - [scalaFile] a Scala tuning file that loads with the instrument: a
+  ///   path, or `asset:<id>`
+  /// - [scalaText] a Scala tuning given as text, instead of [scalaFile]
   static AudNodePreset text(
     String text, {
     required String virtualPath,

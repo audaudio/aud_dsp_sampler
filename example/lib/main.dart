@@ -9,11 +9,11 @@ import 'dart:convert';
 import 'package:aud_dsp_sampler/aud_dsp_sampler_ffi.dart';
 import 'package:flutter/material.dart';
 
-// Built with --dart-define=AUD_USE_SAMPLER=true, the app reads the store of
-// the sampler and so keeps its native library; without it the release
-// build's link hook drops the library, since no member of AudDspSampler is
-// reached (interop-001, ticket 25). The example app of aud_audio plays the
-// sampler.
+/// Whether the app reads the store of the sampler: built with
+/// `--dart-define=AUD_USE_SAMPLER=true` it does and so keeps the native
+/// library; without it the release build's link hook drops the library,
+/// since no member of AudDspSampler is reached (interop-001, ticket 25).
+/// The example app of aud_audio plays the sampler.
 const bool useSampler = bool.fromEnvironment('AUD_USE_SAMPLER');
 
 void main() {
