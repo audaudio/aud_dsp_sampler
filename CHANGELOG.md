@@ -55,11 +55,25 @@
 - Add race-free reloads and early controllers to the node
 
 - A load and a reload agree on which one is newer: the count of the loads, the deferred reload and the serial change under the mutex
+
 - Before the first instrument the node ramps the volume, remembers the controllers for it and counts the messages nothing answers
+
 - A release beyond what a tail counts reports the longest finite tail
+
 - create refuses a host that lacks a function the node calls, or whose engine takes no more caches, and logs why; no exception crosses the C ABI from create, prepare, set_string or a load
+
 - Stepped parameters round to their step; the parameter table is defined once, the defaults and the crossfade derive from it; one helper posts the tasks, one template reloads on a change; the include groups are separated
+
 - Native tests for the host checks, a load that starts with a reload, a polyphony change during a load, the volume and the controllers before the first instrument, the controllers of MIDI 1.0 and 2.0, programs, numeric controls, refused messages, the tempo of the transport, a Scala file, the stretch tuning, the quality steps and releases beyond any tail
+
+- Add local test closures and structural asserts
+
+- The helpers of the Dart tests are closures in the files that use them; test/support is gone
+- The golden renders moved into the test of the test instrument they render
+- The store test expects at least the files and bytes of its instrument, since the suites of dart test share the store of the process
+- One test per member of the link hook and per root key; the C indices, the WAV header and the error of two tunings compared whole
+- The link hook names its library in samplerLibrary; a test checks its members against the @RecordUse members of AudDspSampler
+- The native harness test runs every test and needs each build to pass all the tests it ran
 
 ## 0.1.0 - 2026-10-08
 

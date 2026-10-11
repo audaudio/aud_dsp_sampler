@@ -28,10 +28,13 @@ void main(List<String> args) async {
   });
 }
 
-const _sampler = Class(
-  'AudDspSampler',
-  Library('package:aud_dsp_sampler/src/aud_dsp_sampler_ffi.dart'),
-);
+/// The library of [samplerMembers]; test/hook/link_test.dart checks both
+/// against the source, so that a rename cannot drop the native library of
+/// an app that uses it.
+const String samplerLibrary =
+    'package:aud_dsp_sampler/src/aud_dsp_sampler_ffi.dart';
+
+const _sampler = Class('AudDspSampler', Library(samplerLibrary));
 
 /// The members of the package that call into its native library.
 const List<DefinitionWithStaticCalls> samplerMembers = [

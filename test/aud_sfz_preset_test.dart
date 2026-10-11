@@ -5,10 +5,9 @@
 // found in the LICENSE file in the root of this package.
 
 import 'package:aud_audio_core/aud_audio_core.dart';
-import 'package:aud_dsp_sampler/aud_dsp_sampler.dart';
+import 'package:aud_audio_graph/aud_audio_graph_ffi.dart';
+import 'package:aud_dsp_sampler/aud_dsp_sampler_ffi.dart';
 import 'package:test/test.dart';
-
-import 'support/sampler_graph.dart';
 
 void main() {
   group('AudSfzPreset', () {
@@ -59,12 +58,20 @@ void main() {
     test('takes one tuning', () {
       expect(
         () => AudSfzPreset.file('a.sfz', scalaFile: 'a.scl', scalaText: 'x'),
-        throwsArgumentError,
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            'Give a Scala file or a Scala text, not both',
+          ),
+        ),
       );
     });
 
     test('fits the node and round trips through JSON', () {
-      final graph = samplerGraph();
+      final graph = AudGraphFfi(listen: false, maxFrames: 256);
+      addTearDown(graph.dispose);
+      AudDspSampler.registerWith(graph.hostApi);
       final descriptor = graph.nodeType(AudSfzSampler.typeId)!;
       final preset = AudSfzPreset.text(
         '<region> sample=a.wav',
