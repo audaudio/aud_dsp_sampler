@@ -15,7 +15,8 @@
   "interfaces": {
     "uses": {
       "aud_audio_core": "package dependency: the C ABI 0.4 and node presets",
-      "aud_audio_graph": "dev dependency: the engine of the native and golden tests"
+      "aud_audio_graph": "dev dependency: the engine of the native and golden tests",
+      "aud_midi_standard": "dev dependency: MIDI messages of the golden and instrument tests"
     },
     "usedBy": {
       "aud_audio": "the example app plays the sampler on its sampler page"

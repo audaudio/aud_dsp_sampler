@@ -83,9 +83,20 @@
 - Add parameter docs and a factory to the test instrument
 
 - AudSfzTestInstrument.write is a factory constructor, called as before; the private constructor has its doc, the members follow the code guide order
+
 - The rounded sample frequency plays at most 11 cents off, on C2, not 4
+
 - Every named parameter of AudSfzPreset.file, AudSfzPreset.text and AudSfzTestInstrument.preset is documented
+
 - useSampler of the example has a doc comment
+
+- Add the template sections to both READMEs
+
+- README.md follows the readme template: goals, installation, documentation, code examples, how it works, contributing
+- It names every public member and links the decisions sampler-001 to sampler-003, lifecycle-002, osc-002 and license-003 of aud_audio_pm
+- It describes the native fixes: whole files without a host, refused samples, trusted SFZ input, the options and the build cache of test-native.js
+- README.de.md translates it completely, with the same code blocks
+- index.jsonc lists the dev dependency aud_midi_standard
 
 ## 0.1.0 - 2026-10-08
 
