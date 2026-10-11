@@ -7,7 +7,8 @@
 // Tests the sample store and the pools of the sfizz fork
 // (src/sfizz/FilePool.cpp) on synths of their own, without the node: the
 // streams of files nobody holds while trims run, samples whose headers claim
-// more frames than sfizz counts or memory holds, and a pool without a host.
+// more frames than sfizz counts or memory holds, a pool without a host, and
+// the samples a load cannot read, which it drops like missing ones.
 //
 // The pools of these synths report their bytes to nobody. Each test first
 // lets the engine trim what the store holds for it, so that the store then
@@ -16,7 +17,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <string>
@@ -32,12 +35,8 @@
 
 #include "aud_sampler_fixture.hpp"
 
-#if defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
-// The sanitizers refuse allocations above 1 GB, the way a phone refuses
-// what does not fit, instead of reserving them: a header that claims more
-// frames than memory holds then fails its allocation on every machine.
-#define AUD_TEST_ALLOCATION_LIMIT 1
+// The allocation limit of the fixture, for the whole binary.
+#if AUD_TEST_ALLOCATION_LIMIT
 #if __has_feature(address_sanitizer)
 extern "C" const char* __asan_default_options() {
   return "allocator_may_return_null=1:max_allocation_size_mb=1024";
@@ -47,10 +46,6 @@ extern "C" const char* __tsan_default_options() {
   return "allocator_may_return_null=1:max_allocation_size_mb=1024";
 }
 #endif
-#endif
-#endif
-#ifndef AUD_TEST_ALLOCATION_LIMIT
-#define AUD_TEST_ALLOCATION_LIMIT 0
 #endif
 
 using namespace aud_sampler_test;
@@ -171,16 +166,50 @@ void writeRf64(const std::string& file, const std::vector<float>& samples, uint6
             static_cast<std::streamsize>(samples.size() * kFloatBytes));
 }
 
-// Writes a mono WAV file of 32-bit floats whose data chunk claims
-// `claimedBytes` while it holds `samples`.
-void writeClaimingWav(const std::string& file, const std::vector<float>& samples,
-                      uint32_t claimedBytes) {
-  writeWav(file, samples);
-  std::fstream out(file, std::ios::binary | std::ios::in | std::ios::out);
-  // The size field of the data chunk follows the 36 bytes of the RIFF and
-  // fmt headers and the chunk id.
-  out.seekp(40);
-  out.write(reinterpret_cast<const char*>(&claimedBytes), 4);
+// The bytes of a file.
+std::vector<char> bytesOf(const std::string& file) {
+  std::ifstream in(file, std::ios::binary);
+  return std::vector<char>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+// The Base64 text of `bytes`, as a <sample> header embeds a file.
+std::string base64Of(const std::vector<char>& bytes) {
+  static const char kDigits[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string text;
+  for (size_t i = 0; i < bytes.size(); i += 3) {
+    const size_t left = bytes.size() - i;
+    uint32_t chunk = static_cast<uint32_t>(static_cast<uint8_t>(bytes[i])) << 16;
+    if (left > 1) chunk |= static_cast<uint32_t>(static_cast<uint8_t>(bytes[i + 1])) << 8;
+    if (left > 2) chunk |= static_cast<uint8_t>(bytes[i + 2]);
+    text += kDigits[(chunk >> 18) & 63];
+    text += kDigits[(chunk >> 12) & 63];
+    text += left > 1 ? kDigits[(chunk >> 6) & 63] : '=';
+    text += left > 2 ? kDigits[chunk & 63] : '=';
+  }
+  return text;
+}
+
+// The region a load keeps beside the one it drops on key 60: a sine of
+// 375 Hz on key 61, short enough for its head.
+std::string keptRegion(const TempFolder& folder) {
+  writeWav(folder.file("kept.wav"), sine(375, 0.1));
+  return "<region> sample=kept.wav key=61\n";
+}
+
+// Checks a synth whose load dropped the region of `missing` on key 60 and
+// kept the one of keptRegion(): the sample is named, a note on key 60 starts
+// no voice and stays silent, a note on key 61 sounds.
+void checkDropped(sfz::Synth& synth, const std::string& missing) {
+  AUD_CHECK(synth.getMissingSamples() == std::vector<std::string>{missing});
+  AUD_CHECK(synth.getNumRegions() == 1);
+  synth.noteOn(0, 60, 100);
+  AUD_CHECK(synth.getNumActiveVoices() == 0);
+  AUD_CHECK(peak(render(synth, 4800), 0, 4800) == 0.0f);
+  synth.noteOn(0, 61, 100);
+  AUD_CHECK(synth.getNumActiveVoices() == 1);
+  const std::vector<float> kept = render(synth, 4800);
+  AUD_CHECK_NEAR(frequencyOf(kept, 480, 4000), 375.0, 1.0);
 }
 
 }  // namespace
@@ -313,6 +342,118 @@ AUD_TEST(sfizz_pool_without_a_host_reads_whole_files) {
   sfz::FilePool& pool = synth->getResources().getFilePool();
   AUD_CHECK(pool.takeStreamFailures() == 0);
   AUD_CHECK(pool.takeUnderflows() == 0);
+  synth.reset();
+  trimTheStore();
+}
+
+// ############################################################################
+// Samples a load cannot read
+
+#if AUD_TEST_ALLOCATION_LIMIT
+AUD_TEST(sfizz_pool_without_a_host_drops_a_sample_that_does_not_fit_into_memory) {
+  trimThroughTheEngine();
+  TempFolder folder;
+  // 4 GB of frames claimed: without a host, the pool reads whole files.
+  writeClaimingWav(folder.file("claims.wav"), sine(375, 0.5), 0xFFFFFFF0u);
+  std::unique_ptr<sfz::Synth> synth = synthOf();
+  AUD_CHECK(synth->loadSfzString(folder.file("claims.sfz"),
+                                 "<region> sample=claims.wav key=60\n" + keptRegion(folder)));
+  checkDropped(*synth, "claims.wav");
+  synth.reset();
+  trimTheStore();
+}
+
+AUD_TEST(sfizz_pool_drops_a_sample_whose_head_does_not_fit_into_memory) {
+  trimThroughTheEngine();
+  TempFolder folder;
+  // 4 GB of frames claimed, and an offset that asks for a head of 300
+  // million of them.
+  writeClaimingWav(folder.file("claims.wav"), sine(375, 0.5), 0xFFFFFFF0u);
+  TaskQueue queue;
+  std::unique_ptr<sfz::Synth> synth = synthOf(&queue);
+  AUD_CHECK(synth->loadSfzString(
+      folder.file("claims.sfz"),
+      "<region> sample=claims.wav key=60 offset=300000000\n" + keptRegion(folder)));
+  checkDropped(*synth, "claims.wav");
+  AUD_CHECK(queue.tasks.empty());
+  synth.reset();
+  trimTheStore();
+}
+
+AUD_TEST(sfizz_pool_drops_an_oscillator_whose_file_does_not_fit_into_memory) {
+  trimThroughTheEngine();
+  TempFolder folder;
+  // A wavetable reads its file whole.
+  writeClaimingWav(folder.file("claims.wav"), sine(375, 0.5), 0xFFFFFFF0u);
+  TaskQueue queue;
+  std::unique_ptr<sfz::Synth> synth = synthOf(&queue);
+  AUD_CHECK(synth->loadSfzString(
+      folder.file("claims.sfz"),
+      "<region> sample=claims.wav key=60 oscillator=on\n" + keptRegion(folder)));
+  checkDropped(*synth, "claims.wav");
+  synth.reset();
+  trimTheStore();
+}
+
+AUD_TEST(sfizz_pool_drops_an_embedded_sample_that_does_not_fit_into_memory) {
+  trimThroughTheEngine();
+  TempFolder folder;
+  // The text embeds a file whose header claims 4 GB of frames; no file
+  // beside the text has its name.
+  writeClaimingWav(folder.file("source.wav"), sine(375, 0.5), 0xFFFFFFF0u);
+  const std::string data = base64Of(bytesOf(folder.file("source.wav")));
+  std::unique_ptr<sfz::Synth> synth = synthOf();
+  AUD_CHECK(synth->loadSfzString(folder.file("embedded.sfz"),
+                                 "<sample> name=embedded.wav base64data=" + data + "\n" +
+                                     "<region> sample=embedded.wav key=60\n" +
+                                     keptRegion(folder)));
+  checkDropped(*synth, "embedded.wav");
+  synth.reset();
+  trimTheStore();
+}
+#endif
+
+AUD_TEST(sfizz_pool_drops_a_sample_gone_before_its_file_loads) {
+  trimThroughTheEngine();
+  TempFolder folder;
+  const std::string gone = folder.file("gone.wav");
+  writeWav(gone, sine(375, 0.5));
+  std::unique_ptr<sfz::Synth> synth = synthOf();
+  sfz::FilePool& pool = synth->getResources().getFilePool();
+  // The files load in the second half of the progress: the sample is gone
+  // after the load checked it and before its file loads.
+  pool.setLoadObserver([&gone](float progress) {
+    if (progress >= 0.5f) std::remove(gone.c_str());
+    return true;
+  });
+  AUD_CHECK(synth->loadSfzString(folder.file("gone.sfz"),
+                                 "<region> sample=gone.wav key=60\n" + keptRegion(folder)));
+  pool.setLoadObserver(nullptr);
+  checkDropped(*synth, "gone.wav");
+  synth.reset();
+  trimTheStore();
+}
+
+AUD_TEST(sfizz_pool_drops_a_short_sample_it_cannot_read_whole) {
+  trimThroughTheEngine();
+  TempFolder folder;
+  // Fewer frames than a wavetable: the load reads the sample whole to see
+  // whether it is silent.
+  const std::string file = folder.file("short.wav");
+  writeWav(file, sine(375, 0.05));
+  const std::string text = "<region> sample=short.wav key=60\n" + keptRegion(folder);
+  // A first load reads the information of the sample, which the store keeps
+  // by the path, size and time of the file.
+  AUD_CHECK(synthOf()->loadSfzString(folder.file("short.sfz"), text));
+  trimTheStore();
+  // Garbage of the same size and time: the information stays, the read
+  // fails.
+  const fs::file_time_type time = fs::last_write_time(file);
+  writeText(file, std::string(static_cast<size_t>(fs::file_size(file)), 'x'));
+  fs::last_write_time(file, time);
+  std::unique_ptr<sfz::Synth> synth = synthOf();
+  AUD_CHECK(synth->loadSfzString(folder.file("short.sfz"), text));
+  checkDropped(*synth, "short.wav");
   synth.reset();
   trimTheStore();
 }

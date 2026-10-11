@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
+// set lets go of a region the load drops.
+
 #pragma once
 
 #include "Region.h"
@@ -31,6 +34,12 @@ public:
      * @param region
      */
     void addRegion(Region* region) noexcept;
+    /**
+     * @brief Remove a region from the set
+     *
+     * @param region
+     */
+    void removeRegion(const Region* region) noexcept;
     /**
      * @brief Add a subset to the set
      *

@@ -533,6 +533,33 @@ AUD_TEST(a_sample_deleted_after_the_load_plays_its_head) {
   AUD_CHECK(cacheUsage().tasks == 0);
 }
 
+#if AUD_TEST_ALLOCATION_LIMIT
+AUD_TEST(drops_a_sample_whose_head_does_not_fit_into_memory) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  // The header claims 4 GB of frames; the offset asks for a head of 300
+  // million of them, more than memory holds.
+  writeClaimingWav(folder.file("claims.wav"), sine(375, 0.5), 0xFFFFFFF0u);
+  const int32_t id =
+      f.loadText(node, folder.file("claims.sfz"),
+                 "<region> sample=claims.wav key=60 offset=300000000\n" +
+                     sineInstrument(folder, "kept", 375, 1.0, "key=69"));
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  AUD_CHECK(f.load(id).result == AUD_OK);
+  AUD_CHECK(std::string(f.load(id).message) == "sfizz could not read 1 sample: claims.wav");
+  // A note on the key of the dropped region stays silent, the region that
+  // is left sounds.
+  f.renderOffline(256);
+  f.noteOn(node, 60);
+  f.renderOffline(4800);
+  AUD_CHECK(peak(f.left, since(f, 4800), f.left.size()) == 0.0f);
+  f.noteOn(node, 69);
+  f.renderOffline(4800);
+  AUD_CHECK_NEAR(peak(f.left, since(f, 4800, 480), f.left.size()), kLevel, 0.002);
+}
+#endif
+
 AUD_TEST(swaps_instruments_while_it_renders_live) {
   Fixture f;
   TempFolder folder;

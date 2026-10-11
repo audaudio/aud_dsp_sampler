@@ -227,6 +227,7 @@ proves the link hook.
 - A pool without a host - sfizz's C API, the host-less tests of the
   fork - reads whole files at once. A sample with more than 2^31 - 1
   frames, or one that is neither mono nor stereo, is refused and named as
+  missing. A sample the memory cannot hold is dropped and named as
   missing; a stream that memory cannot hold leaves its voices on the head.
 - SFZ instruments are trusted input: an SFZ file can `#include` or play any
   file the app can read - absolute paths and `../` work, which SFZ

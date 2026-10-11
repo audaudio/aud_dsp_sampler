@@ -39,6 +39,20 @@
 #include "aud_dsp_sampler.h"
 #include "aud_test.hpp"
 
+// The sanitizer builds refuse allocations above 1 GB, the way a phone
+// refuses what does not fit, instead of reserving them: a header that claims
+// more frames than memory holds then fails its allocation on every machine.
+// sfizz_file_pool_test.cpp sets the limit for the whole binary; the tests
+// that need it run where AUD_TEST_ALLOCATION_LIMIT is 1.
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define AUD_TEST_ALLOCATION_LIMIT 1
+#endif
+#endif
+#ifndef AUD_TEST_ALLOCATION_LIMIT
+#define AUD_TEST_ALLOCATION_LIMIT 0
+#endif
+
 namespace aud_sampler_test {
 
 constexpr double kRate = 48000.0;
@@ -113,6 +127,18 @@ inline void writeWav(const std::string& file, const std::vector<float>& samples,
   out.write("data", 4);
   u32(bytes);
   out.write(reinterpret_cast<const char*>(samples.data()), bytes);
+}
+
+// Writes a mono WAV file of 32-bit floats whose data chunk claims
+// `claimedBytes` while it holds `samples`.
+inline void writeClaimingWav(const std::string& file, const std::vector<float>& samples,
+                             uint32_t claimedBytes) {
+  writeWav(file, samples);
+  std::fstream out(file, std::ios::binary | std::ios::in | std::ios::out);
+  // The size field of the data chunk follows the 36 bytes of the RIFF and
+  // fmt headers and the chunk id.
+  out.seekp(40);
+  out.write(reinterpret_cast<const char*>(&claimedBytes), 4);
 }
 
 inline void writeText(const std::string& file, const std::string& text) {

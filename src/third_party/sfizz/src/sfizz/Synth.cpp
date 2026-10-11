@@ -10,7 +10,9 @@
 // parser instead of printing them; controllers can be restored without
 // their reactions, and their smoothers start from the restored values. The
 // metronome is gone, and with the file pool's own threads the calls that
-// waited for them and the timer of their garbage collection.
+// waited for them and the timer of their garbage collection. A sample whose
+// head or whole file does not load counts as missing too; the regions a
+// load drops start no voice and leave no pointer behind.
 
 #include "SynthPrivate.h"
 #include "Config.h"
@@ -716,18 +718,27 @@ void Synth::Impl::finalizeSfzLoad()
     rootPath_ = u8EncodedString(rootDirectory);
 
     size_t currentRegionIndex = 0;
-    size_t currentRegionCount = layers_.size();
+    const size_t currentRegionCount = layers_.size();
 
     absl::flat_hash_map<sfz::FileId, int64_t> filesToLoad;
 
-    auto removeCurrentRegion = [this, &currentRegionIndex, &currentRegionCount]() {
-        const Region& region = layers_[currentRegionIndex]->getRegion();
+    // The regions the load drops because it cannot read their samples, which
+    // it names (aud_dsp_sampler, ticket 25). They get no list that starts a
+    // voice and leave the instrument at the end of the load, with every
+    // pointer to them.
+    absl::flat_hash_set<const Layer*> unreadable;
+    auto dropRegion = [this, &unreadable](const Layer& layer) {
+        const Region& region = layer.getRegion();
         DBG("Removing the region with sample " << *region.sampleId);
         const std::string& sample = region.sampleId->filename();
         if (absl::c_find(missingSamples_, sample) == missingSamples_.end())
             missingSamples_.push_back(sample);
-        layers_.erase(layers_.begin() + currentRegionIndex);
-        --currentRegionCount;
+        unreadable.insert(&layer);
+    };
+
+    auto removeCurrentRegion = [this, &currentRegionIndex, &dropRegion]() {
+        dropRegion(*layers_[currentRegionIndex]);
+        ++currentRegionIndex;
     };
 
     size_t maxFilters { 0 };
@@ -770,6 +781,10 @@ void Synth::Impl::finalizeSfzLoad()
 
             if (fileInformation->end < config::wavetableMaxFrames) {
                 auto sample = filePool.loadFile(*region.sampleId);
+                if (!sample) {
+                    removeCurrentRegion();
+                    continue;
+                }
                 bool allZeros = true;
                 int numChannels = sample->information.numChannels;
                 for (int i = 0; i < numChannels; ++i) {
@@ -831,6 +846,50 @@ void Synth::Impl::finalizeSfzLoad()
                 continue;
             }
         }
+
+        ++currentRegionIndex;
+    }
+
+    // A cancelled load leaves the synth half-built; its owner discards it
+    // (aud_dsp_sampler, ticket 25).
+    if (filePool.loadCancelled())
+        return;
+
+    // Reset the preload call count to check for unused preloaded samples
+    // when reloading
+    if (reloading)
+        filePool.resetPreloadCallCounts();
+
+    absl::flat_hash_set<sfz::FileId> unreadFiles;
+    size_t filesLoaded = 0;
+    for (const auto& toLoad: filesToLoad) {
+        if (!filePool.reportProgress(0.5f + 0.5f * static_cast<float>(filesLoaded++) /
+                static_cast<float>(filesToLoad.size())))
+            return;
+        if (!filePool.preloadFile(toLoad.first, toLoad.second))
+            unreadFiles.insert(toLoad.first);
+    }
+    filePool.reportProgress(1.0f);
+
+    // Remove preloaded data with no linked regions
+    if (reloading)
+        filePool.removeUnusedPreloadedData();
+
+    // A sample whose head - or whole file, without a host - the pool could
+    // not load is missing too (aud_dsp_sampler, ticket 25): its header may
+    // claim more frames than memory holds, or it is gone since the check.
+    for (const LayerPtr& layerPtr : layers_) {
+        const Region& region = layerPtr->getRegion();
+        if (!region.isOscillator() && unreadFiles.contains(*region.sampleId))
+            dropRegion(*layerPtr);
+    }
+
+    // The regions the load keeps get the lists that start their voices.
+    for (const LayerPtr& layerPtr : layers_) {
+        Layer& layer = *layerPtr;
+        if (unreadable.contains(&layer))
+            continue;
+        Region& region = layer.getRegion();
 
         if (region.lastKeyswitch) {
             if (currentSwitch_)
@@ -903,39 +962,14 @@ void Synth::Impl::finalizeSfzLoad()
         havePitchLFO = havePitchLFO || region.pitchLFO != absl::nullopt;
         haveFilterLFO = haveFilterLFO || region.filterLFO != absl::nullopt;
         numOutputs_ = max(region.output + 1, numOutputs_);
-
-        ++currentRegionIndex;
     }
-
-    // A cancelled load leaves the synth half-built; its owner discards it
-    // (aud_dsp_sampler, ticket 25).
-    if (filePool.loadCancelled())
-        return;
-
-    // Reset the preload call count to check for unused preloaded samples
-    // when reloading
-    if (reloading)
-        filePool.resetPreloadCallCounts();
-
-    size_t filesLoaded = 0;
-    for (const auto& toLoad: filesToLoad) {
-        if (!filePool.reportProgress(0.5f + 0.5f * static_cast<float>(filesLoaded++) /
-                static_cast<float>(filesToLoad.size())))
-            return;
-        filePool.preloadFile(toLoad.first, toLoad.second);
-    }
-    filePool.reportProgress(1.0f);
-
-    // Remove preloaded data with no linked regions
-    if (reloading)
-        filePool.removeUnusedPreloadedData();
 
     // Remove bad regions with unknown files
-    if (currentRegionCount < layers_.size()) {
-        DBG("Removing " << (layers_.size() - currentRegionCount)
+    if (!unreadable.empty()) {
+        DBG("Removing " << unreadable.size()
             << " out of " << layers_.size() << " regions");
     }
-    layers_.resize(currentRegionCount);
+    removeLayers(unreadable);
 
     // collect all CCs used in regions, with matrix not yet connected
     BitArray<config::numCCs> usedCCs;
@@ -1009,6 +1043,34 @@ void Synth::Impl::finalizeSfzLoad()
                 swLastSlots_.set(key);
         }
     }
+}
+
+void Synth::Impl::removeLayers(const absl::flat_hash_set<const Layer*>& layers)
+{
+    if (layers.empty())
+        return;
+
+    const auto removed = [&layers](const Layer* layer) { return layers.contains(layer); };
+    const auto purge = [&removed](LayerViewVector& list) {
+        list.erase(std::remove_if(list.begin(), list.end(), removed), list.end());
+    };
+    for (auto* lists : { &lastKeyswitchLists_, &downKeyswitchLists_, &upKeyswitchLists_,
+                         &noteActivationLists_ }) {
+        for (LayerViewVector& list : *lists)
+            purge(list);
+    }
+    purge(previousKeyswitchLists_);
+    for (LayerViewVector& list : ccActivationLists_)
+        purge(list);
+
+    for (const Layer* layer : layers) {
+        const Region& region = layer->getRegion();
+        if (region.parent != nullptr)
+            region.parent->removeRegion(&region);
+    }
+
+    layers_.erase(std::remove_if(layers_.begin(), layers_.end(),
+        [&removed](const LayerPtr& layer) { return removed(layer.get()); }), layers_.end());
 }
 
 bool Synth::loadScalaFile(const fs::path& path)

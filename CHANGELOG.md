@@ -93,10 +93,23 @@
 - Add the template sections to both READMEs
 
 - README.md follows the readme template: goals, installation, documentation, code examples, how it works, contributing
+
 - It names every public member and links the decisions sampler-001 to sampler-003, lifecycle-002, osc-002 and license-003 of aud_audio_pm
+
 - It describes the native fixes: whole files without a host, refused samples, trusted SFZ input, the options and the build cache of test-native.js
+
 - README.de.md translates it completely, with the same code blocks
+
 - index.jsonc lists the dev dependency aud_midi_standard
+
+- Add safe drops of samples that fail to load to the fork
+
+- A sample whose head, or whole file without a host, the pool cannot load is named as missing and its regions are dropped; the load kept them before, and a note on one read a null modulation buffer on the audio thread
+- The load checks the regions, then loads the files, then gives the lists that start voices only to the regions it keeps; a short sample the silence check cannot read whole is dropped instead of read through a null handle
+- A dropped region leaves the keyswitch lists and its set as well: sfizz kept pointers to the freed layer there, and a keyswitch note wrote into freed memory
+- A voice whose file the pool does not hold goes back to idle at once instead of rendering a block without its modulation targets
+- Native tests: samples that do not fit into memory with and without a host, as an oscillator and embedded in the text, a sample gone before its file loads, a short one that turned unreadable, the lists of dropped regions, a voice without its file, the load message of the node; the fixture holds the allocation limit of the sanitizer builds and writeClaimingWav
+- README.md and README.de.md: a sample the memory cannot hold is dropped and named as missing
 
 ## 0.1.0 - 2026-10-08
 

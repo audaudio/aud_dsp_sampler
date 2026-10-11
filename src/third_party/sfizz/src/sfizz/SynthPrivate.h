@@ -1,6 +1,7 @@
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
 // synth keeps the samples and the first parser errors of its last load; the
-// time of the file pool's garbage collection is gone with it.
+// time of the file pool's garbage collection is gone with it. A load removes
+// the layers it drops from every list that points at them.
 
 #pragma once
 
@@ -19,6 +20,7 @@
 #include "modulations/sources/LFO.h"
 #include "parser/Parser.h"
 #include "parser/ParserListener.h"
+#include <absl/container/flat_hash_set.h>
 
 namespace sfz {
 
@@ -207,6 +209,15 @@ struct Synth::Impl final: public Parser::Listener {
      * state.
      */
     void finalizeSfzLoad();
+
+    /**
+     * @brief Remove layers from the instrument and from every list that
+     * points at them: the keyswitch lists and the sets the parser filled,
+     * and the activation lists of the load (aud_dsp_sampler, ticket 25).
+     *
+     * @param layers the layers to remove
+     */
+    void removeLayers(const absl::flat_hash_set<const Layer*>& layers);
 
     /**
      * @brief Set the current keyswitch, taking into account octave offsets and the like.

@@ -6,7 +6,8 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
 // voice whose file still streams plays silence past what the stream
-// delivered and keeps its position, instead of ending at the head.
+// delivered and keeps its position, instead of ending at the head. A voice
+// whose file the pool does not hold goes back to idle when it starts.
 
 #include "Voice.h"
 #include "Layer.h"
@@ -484,7 +485,9 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
         FilePool& filePool = resources.getFilePool();
         impl.currentPromise_ = filePool.getFilePromise(region.sampleId);
         if (!impl.currentPromise_) {
-            impl.switchState(State::cleanMeUp);
+            // Idle at once: a voice left to clean up would render a block
+            // without its modulation targets (aud_dsp_sampler, ticket 25).
+            reset();
             return false;
         }
         impl.updateLoopInformation();

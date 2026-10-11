@@ -232,8 +232,10 @@ Preset und beweist den Link-Hook.
 - Ein Pool ohne Host - die C-API von sfizz, die Tests des Forks ohne
   Host - liest ganze Dateien auf einmal. Ein Sample mit mehr als
   2^31 - 1 Frames oder eines, das weder mono noch stereo ist, wird
-  abgewiesen und als fehlend genannt; ein Stream, den der Arbeitsspeicher
-  nicht fassen kann, lässt seine Stimmen beim Kopf.
+  abgewiesen und als fehlend genannt. Ein Sample, das der Arbeitsspeicher
+  nicht fassen kann, wird verworfen und als fehlend genannt; ein Stream,
+  den der Arbeitsspeicher nicht fassen kann, lässt seine Stimmen beim
+  Kopf.
 - SFZ-Instrumente gelten als vertrauenswürdige Eingabe: Eine SFZ-Datei
   kann jede Datei, die die App lesen kann, per `#include` einbinden oder
   abspielen - absolute Pfade und `../` funktionieren, so teilen
