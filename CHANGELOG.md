@@ -26,6 +26,12 @@
 
 - aud_audio_core ^0.4.0 instead of ^0.1.0, as the graph of the dev dependencies requires; pub upgrade --tighten failed on the old range
 
+- Add per-filter RBJ tests and a stricter native harness
+
+- RBJ filter tests: one test per filter and aspect, checked with AUD_CHECK and AUD_CHECK_NEAR, silent when they pass, in the repo's 2-space style with // .... landmarks
+- scripts/test-native.js refuses unknown options and --only values with the usage and exit code 2, passes the pristine sfizz path as an escaped C string and prunes the objects and binaries of earlier runs
+- WorkerHold holds every worker of the engine and checks each post
+
 ## 0.1.0 - 2026-10-08
 
 ### Added

@@ -28,9 +28,10 @@
 #include <vector>
 
 #include "aud_audio_graph.h"
+#include "aud_ump.h"
+
 #include "aud_dsp_sampler.h"
 #include "aud_test.hpp"
-#include "aud_ump.h"
 
 namespace aud_sampler_test {
 
@@ -101,11 +102,35 @@ inline std::vector<float> sine(double frequency, double seconds,
 }
 
 // ............................................................................
-// The graph with the sampler
+// The workers and the budget of the process
+
+// Waits until the workers of the process are idle.
+inline void waitTasks() { AUD_CHECK(aud_tasks_wait_idle(10000) == AUD_OK); }
+
+inline AudCacheUsage cacheUsage() {
+  AudCacheUsage usage{};
+  usage.struct_size = sizeof(AudCacheUsage);
+  AUD_CHECK(aud_cache_usage(&usage) == AUD_OK);
+  return usage;
+}
+
+// A budget for one test; the default comes back at the end.
+struct BudgetScope {
+  uint64_t before = aud_cache_budget();
+  explicit BudgetScope(uint64_t bytes) {
+    aud_cache_set_budget(bytes);
+    waitTasks();
+  }
+  ~BudgetScope() {
+    aud_cache_set_budget(before);
+    waitTasks();
+  }
+};
 
 // The workers of the process, held: tasks posted meanwhile wait until the
-// hold ends. Two blocking tasks take both workers. Nothing may wait for the
-// workers while they are held: no offline render, no wait for a load.
+// hold ends. One blocking task per worker takes them all. Nothing may wait
+// for the workers while they are held: no offline render, no wait for a
+// load.
 struct WorkerHold {
   static std::atomic<int>& holding() {
     static std::atomic<int> value{0};
@@ -123,13 +148,20 @@ struct WorkerHold {
 
   bool active = true;
 
+  // Holds the workers of the engine of `host`; a refused post fails the
+  // test and holds fewer.
   explicit WorkerHold(const AudHostApi* host) {
     released().store(false);
-    for (int i = 0; i < 2; ++i) {
+    const uint32_t workers = cacheUsage().workers;
+    AUD_CHECK(workers > 0);
+    int posted = 0;
+    for (uint32_t i = 0; i < workers; ++i) {
       const AudTask task{sizeof(AudTask), 0, block, nullptr};
-      host->post_task(host->host, &task);
+      const int32_t result = host->post_task(host->host, &task);
+      AUD_CHECK(result == AUD_OK);
+      if (result == AUD_OK) posted += 1;
     }
-    while (holding().load() < 2) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    while (holding().load() < posted) std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   void release() {
     if (!active) return;
@@ -139,6 +171,9 @@ struct WorkerHold {
   }
   ~WorkerHold() { release(); }
 };
+
+// ............................................................................
+// The graph with the sampler
 
 struct Fixture {
   AudGraph* graph = nullptr;
@@ -343,29 +378,6 @@ struct Fixture {
   void bend(int32_t node, uint32_t value) {
     const uint32_t word = aud_ump_midi1_word(0, 0xE0, value & 0x7f, value >> 7);
     send(node, aud_event_ump(&word, 1, 0, 0));
-  }
-};
-
-// Waits until the workers of the process are idle.
-inline void waitTasks() { AUD_CHECK(aud_tasks_wait_idle(10000) == AUD_OK); }
-
-inline AudCacheUsage cacheUsage() {
-  AudCacheUsage usage{};
-  usage.struct_size = sizeof(AudCacheUsage);
-  AUD_CHECK(aud_cache_usage(&usage) == AUD_OK);
-  return usage;
-}
-
-// A budget for one test; the default comes back at the end.
-struct BudgetScope {
-  uint64_t before = aud_cache_budget();
-  explicit BudgetScope(uint64_t bytes) {
-    aud_cache_set_budget(bytes);
-    waitTasks();
-  }
-  ~BudgetScope() {
-    aud_cache_set_budget(before);
-    waitTasks();
   }
 };
 

@@ -16,18 +16,8 @@
 //
 // Every translation unit compiles to an object cached under .dart_tool by
 // the hash of its flags, its source and the headers, in parallel; a run
-// without changes only links and executes.
-//
-//   node scripts/test-native.js               every build this machine has
-//   node scripts/test-native.js --no-sanitize  one build, no sanitizer
-//   node scripts/test-native.js --rtsan        fail without rtsan
-//   node scripts/test-native.js --no-rtsan     skip the rtsan build
-//   node scripts/test-native.js --no-tsan      skip the thread sanitizer
-//   node scripts/test-native.js --only=rtsan   one build: asan, plain, rtsan
-//                                              or tsan
-//   AUD_TEST_FILTER=<part of a name>           run the matching tests only
-//   AUD_SFIZZ_PRISTINE=<sfizz checkout>        compare the RBJ filters of the
-//                                              fork with the Faust originals
+// without changes only links and executes. Each build keeps only the
+// objects and the binary of its last run. The options are in `usage` below.
 
 'use strict';
 
@@ -38,14 +28,63 @@ const os = require('node:os');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const args = process.argv.slice(2);
-const sanitize = !args.includes('--no-sanitize');
-const wantRtsan = args.includes('--rtsan');
-const only = (args.find((arg) => arg.startsWith('--only=')) ?? '').slice(7);
+
+// The builds --only= names.
+const variants = ['asan', 'plain', 'rtsan', 'tsan'];
+
+const usage = `Usage: node scripts/test-native.js [options]
+
+  (no options)      every build this machine has
+  --no-sanitize     one build, no sanitizer
+  --rtsan           fail without rtsan
+  --no-rtsan        skip the rtsan build
+  --no-tsan         skip the thread sanitizer
+  --only=<build>    one build: ${variants.join(', ')}
+  --help            this text
+
+  AUD_TEST_FILTER=<part of a name>     run the matching tests only
+  AUD_SFIZZ_PRISTINE=<sfizz checkout>  compare the RBJ filters of the fork
+                                       with the Faust originals
+`;
+
+// The options of the command line; anything else ends the run with the
+// usage and exit code 2.
+function parseArgs(argv) {
+  const options = {
+    sanitize: true,
+    wantRtsan: false,
+    noRtsan: false,
+    noTsan: false,
+    only: '',
+  };
+  for (const arg of argv) {
+    if (arg === '--help') {
+      process.stdout.write(usage);
+      process.exit(0);
+    } else if (arg === '--no-sanitize') {
+      options.sanitize = false;
+    } else if (arg === '--rtsan') {
+      options.wantRtsan = true;
+    } else if (arg === '--no-rtsan') {
+      options.noRtsan = true;
+    } else if (arg === '--no-tsan') {
+      options.noTsan = true;
+    } else if (arg.startsWith('--only=') && variants.includes(arg.slice(7))) {
+      options.only = arg.slice(7);
+    } else {
+      process.stderr.write(`Unknown option ${arg}\n\n${usage}`);
+      process.exit(2);
+    }
+  }
+  return options;
+}
+
+const options = parseArgs(process.argv.slice(2));
+const { sanitize, wantRtsan, only } = options;
 const skipRtsan =
-  args.includes('--no-rtsan') || !sanitize || (only !== '' && only !== 'rtsan');
+  options.noRtsan || !sanitize || (only !== '' && only !== 'rtsan');
 const skipTsan =
-  args.includes('--no-tsan') || !sanitize || (only !== '' && only !== 'tsan');
+  options.noTsan || !sanitize || (only !== '' && only !== 'tsan');
 const skipMain = only !== '' && only !== 'asan' && only !== 'plain';
 
 // Compilers that may carry the RealtimeSanitizer: Apple's clang refuses
@@ -177,7 +216,11 @@ function units(context) {
   for (const file of context.testSources) {
     const flags = ['-std=c++17', ...sfizzDefines];
     if (context.pristineFilters && file.endsWith('sfizz_rbj_filters_test.cpp')) {
-      flags.push(`-DSFIZZ_PRISTINE_FILTER_IMPLS="${context.pristineFilters}"`);
+      // A C string literal of the path: JSON escapes quotes and backslashes
+      // the way C does.
+      flags.push(
+        `-DSFIZZ_PRISTINE_FILTER_IMPLS=${JSON.stringify(context.pristineFilters)}`,
+      );
     }
     result.push({ file, flags });
   }
@@ -194,10 +237,15 @@ function runCompiler(compiler, flags) {
   });
 }
 
+// The folder of the objects and the binary of a build.
+function outDirOf(name) {
+  return path.join(root, '.dart_tool', 'aud_native_test', name);
+}
+
 // Compiles what is not cached, at most one unit per core at a time; returns
 // the objects.
 async function compileAll(name, compiler, variantFlags, context) {
-  const outDir = path.join(root, '.dart_tool', 'aud_native_test', name);
+  const outDir = outDirOf(name);
   fs.mkdirSync(outDir, { recursive: true });
   const common = [
     '-c',
@@ -253,11 +301,9 @@ async function build(name, compiler, variantFlags, context) {
   const objects = await compileAll(name, compiler, variantFlags, context);
   const hash = createHash('sha256');
   for (const object of objects) hash.update(object);
+  const outDir = outDirOf(name);
   const binary = path.join(
-    root,
-    '.dart_tool',
-    'aud_native_test',
-    name,
+    outDir,
     `aud_sampler_test-${hash.digest('hex').slice(0, 16)}`,
   );
   if (!fs.existsSync(binary)) {
@@ -269,7 +315,18 @@ async function build(name, compiler, variantFlags, context) {
       process.exit(result.status ?? 1);
     }
   }
+  prune(outDir, [...objects, binary]);
   return binary;
+}
+
+// Removes what earlier runs left in the folder of a build: the objects and
+// binaries of sources, headers or flags that changed since.
+function prune(outDir, keep) {
+  const kept = new Set(keep.map((file) => path.basename(file)));
+  for (const entry of fs.readdirSync(outDir)) {
+    if (kept.has(entry)) continue;
+    fs.rmSync(path.join(outDir, entry), { recursive: true, force: true });
+  }
 }
 
 function execute(binary, env) {
