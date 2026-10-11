@@ -4,6 +4,14 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
+// load reports its progress and can be cancelled, names the samples it
+// could not read, the effects it does not know and the errors of its parser
+// instead of printing them,
+// controllers can be restored without their reactions and their smoothers
+// start from the restored values, and the
+// metronome is gone.
+
 #include "SynthPrivate.h"
 #include "Config.h"
 #include "utility/Debug.h"
@@ -22,7 +30,6 @@
 #include "Wavetables.h"
 #include "Tuning.h"
 #include "BeatClock.h"
-#include "Metronome.h"
 #include "SynthConfig.h"
 #include "ScopedFTZ.h"
 #include "utility/Base64.h"
@@ -141,16 +148,19 @@ void Synth::Impl::onParseFullBlock(const std::string& header, const std::vector<
     }
 }
 
+// The errors of a load go to its owner instead of stderr (aud_dsp_sampler,
+// ticket 25); the warnings are dropped.
 void Synth::Impl::onParseError(const SourceRange& range, const std::string& message)
 {
     const auto relativePath = range.start.filePath->lexically_relative(parser_.originalDirectory());
-    std::cerr << "Parse error in " << relativePath << " at line " << range.start.lineNumber + 1 << ": " << message << '\n';
+    parseErrors_.push_back(relativePath.string() + " at line " +
+        std::to_string(range.start.lineNumber + 1) + ": " + message);
 }
 
 void Synth::Impl::onParseWarning(const SourceRange& range, const std::string& message)
 {
-    const auto relativePath = range.start.filePath->lexically_relative(parser_.originalDirectory());
-    std::cerr << "Parse warning in " << relativePath << " at line " << range.start.lineNumber + 1 << ": " << message << '\n';
+    (void)range;
+    (void)message;
 }
 
 void Synth::Impl::buildRegion(const std::vector<Opcode>& regionOpcodes)
@@ -263,6 +273,9 @@ void Synth::Impl::clear()
 {
     FilePool& filePool = resources_.getFilePool();
     MidiState& midiState = resources_.getMidiState();
+    missingSamples_.clear();
+    parseErrors_.clear();
+    effectFactory_.clearUnsupportedTypes();
 
     // Clear the background queues before removing everyone
     filePool.waitForBackgroundLoading();
@@ -713,6 +726,9 @@ void Synth::Impl::finalizeSfzLoad()
     auto removeCurrentRegion = [this, &currentRegionIndex, &currentRegionCount]() {
         const Region& region = layers_[currentRegionIndex]->getRegion();
         DBG("Removing the region with sample " << *region.sampleId);
+        const std::string& sample = region.sampleId->filename();
+        if (absl::c_find(missingSamples_, sample) == missingSamples_.end())
+            missingSamples_.push_back(sample);
         layers_.erase(layers_.begin() + currentRegionIndex);
         --currentRegionCount;
     };
@@ -730,6 +746,12 @@ void Synth::Impl::finalizeSfzLoad()
     FlexEGs::clearUnusedCurves();
 
     while (currentRegionIndex < currentRegionCount) {
+        // The progress of a load, and its cancellation (aud_dsp_sampler,
+        // ticket 25): the regions are the first half, the files the second.
+        if (!filePool.reportProgress(0.5f * static_cast<float>(currentRegionIndex) /
+                static_cast<float>(currentRegionCount)))
+            break;
+
         Layer& layer = *layers_[currentRegionIndex];
         Region& region = layer.getRegion();
 
@@ -888,13 +910,24 @@ void Synth::Impl::finalizeSfzLoad()
         ++currentRegionIndex;
     }
 
+    // A cancelled load leaves the synth half-built; its owner discards it
+    // (aud_dsp_sampler, ticket 25).
+    if (filePool.loadCancelled())
+        return;
+
     // Reset the preload call count to check for unused preloaded samples
     // when reloading
     if (reloading)
         filePool.resetPreloadCallCounts();
 
-    for (const auto& toLoad: filesToLoad)
+    size_t filesLoaded = 0;
+    for (const auto& toLoad: filesToLoad) {
+        if (!filePool.reportProgress(0.5f + 0.5f * static_cast<float>(filesLoaded++) /
+                static_cast<float>(filesToLoad.size())))
+            return;
         filePool.preloadFile(toLoad.first, toLoad.second);
+    }
+    filePool.reportProgress(1.0f);
 
     // Remove preloaded data with no linked regions
     if (reloading)
@@ -1218,15 +1251,6 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
 
     // Apply the master volume
     buffer.applyGain(db2mag(impl.volume_));
-
-    // Process the metronome (debugging tool for host time info)
-    constexpr bool metronomeEnabled = false;
-    if (metronomeEnabled) {
-        Metronome& metro = impl.resources_.getMetronome();
-        metro.processAdding(
-            bc.getRunningBeatNumber().data(), bc.getRunningBeatsPerBar().data(),
-            buffer.getChannel(0), buffer.getChannel(1), numFrames);
-    }
 
     // Perform any remaining modulators
     mm.endCycle();
@@ -1655,6 +1679,35 @@ int Synth::getNumRegions() const noexcept
 {
     Impl& impl = *impl_;
     return static_cast<int>(impl.layers_.size());
+}
+
+const std::vector<std::string>& Synth::getMissingSamples() const noexcept
+{
+    return impl_->missingSamples_;
+}
+
+const std::vector<std::string>& Synth::getParseErrors() const noexcept
+{
+    return impl_->parseErrors_;
+}
+
+const std::vector<std::string>& Synth::getUnsupportedEffects() const noexcept
+{
+    return impl_->effectFactory_.unsupportedTypes();
+}
+
+void Synth::resetControllerSmoothers() noexcept
+{
+    impl_->genController_->resetSmoothers();
+}
+
+void Synth::restoreHdcc(int ccNumber, float normValue) noexcept
+{
+    if (ccNumber < 0 || ccNumber >= config::numCCs)
+        return;
+    Impl& impl = *impl_;
+    impl.changedCCsThisCycle_.set(ccNumber);
+    impl.resources_.getMidiState().ccEvent(0, ccNumber, normValue);
 }
 
 int Synth::getNumGroups() const noexcept

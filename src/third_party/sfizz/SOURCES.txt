@@ -14,8 +14,6 @@ external/abseil-cpp/absl/strings/numbers.cc
 external/abseil-cpp/absl/strings/str_cat.cc
 external/abseil-cpp/absl/strings/str_replace.cc
 external/abseil-cpp/absl/strings/string_view.cc
-external/cephes/src/chbevl.c
-external/cephes/src/i0.c
 external/st_audiofile/src/st_audiofile.c
 external/st_audiofile/src/st_audiofile_libs.c
 external/st_audiofile/thirdparty/libaiff/libaiff.all.c
@@ -56,7 +54,6 @@ src/sfizz/Interpolators.cpp
 src/sfizz/LFO.cpp
 src/sfizz/LFODescription.cpp
 src/sfizz/Layer.cpp
-src/sfizz/Metronome.cpp
 src/sfizz/MidiState.cpp
 src/sfizz/Opcode.cpp
 src/sfizz/OpcodeCleanup.cpp
@@ -85,7 +82,6 @@ src/sfizz/effects/Compressor.cpp
 src/sfizz/effects/Disto.cpp
 src/sfizz/effects/Eq.cpp
 src/sfizz/effects/Filter.cpp
-src/sfizz/effects/Fverb.cpp
 src/sfizz/effects/Gain.cpp
 src/sfizz/effects/Gate.cpp
 src/sfizz/effects/Limiter.cpp

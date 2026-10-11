@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// fverb effect is gone; its Faust code was licensed LGPL-3.0 with an
+// exception, which the package does not ship. The factory names the effect
+// types it did not know; their effects pass the signal through.
+
 #include "Effects.h"
 #include "AudioSpan.h"
 #include "Opcode.h"
@@ -19,7 +24,6 @@
 #include "effects/Gate.h"
 #include "effects/Disto.h"
 #include "effects/Strings.h"
-#include "effects/Fverb.h"
 #include "effects/Rectify.h"
 #include "effects/Gain.h"
 #include "effects/Width.h"
@@ -39,7 +43,6 @@ void EffectFactory::registerStandardEffectTypes()
     registerEffectType("gate", fx::Gate::makeInstance);
     registerEffectType("disto", fx::Disto::makeInstance);
     registerEffectType("strings", fx::Strings::makeInstance);
-    registerEffectType("fverb", fx::Fverb::makeInstance);
 
     // extensions (book)
     registerEffectType("rectify", fx::Rectify::makeInstance);
@@ -74,6 +77,8 @@ std::unique_ptr<Effect> EffectFactory::makeEffect(absl::Span<const Opcode> membe
     const auto it = absl::c_find_if(_entries, [&](const FactoryEntry& entry) { return entry.name == type; });
     if (it == _entries.end()) {
         DBG("Unsupported effect type: " << type);
+        if (absl::c_find(_unsupported, type) == _unsupported.end())
+            _unsupported.emplace_back(type);
         return absl::make_unique<sfz::fx::Nothing>();
     }
 

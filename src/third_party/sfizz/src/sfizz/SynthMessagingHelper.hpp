@@ -1,3 +1,9 @@
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
+// message dispatches on the audio thread without allocating - the indices
+// of a path live inline, and a message changes the CC modulations a region
+// has but adds none -, and the indices of a path are checked against their
+// bounds.
+
 #pragma once
 
 #include "CCMap.h"
@@ -21,6 +27,7 @@
 #include "TriggerEvent.h"
 #include "SynthPrivate.h"
 #include "utility/Size.h"
+#include <absl/container/inlined_vector.h>
 #include <type_traits>
 #include <invoke.hpp/invoke.hpp>
 
@@ -64,7 +71,6 @@ public:
         , sig(sig)
         , request_args(args)
     {
-        indices.reserve(maxIndices);
     }
 
     enum class ModParam { Depth, Curve, Smooth, Step };
@@ -435,7 +441,11 @@ public:
     }
 
     template <class T, class... Args>
-    void set(CCMap<T>& map, Args&&... args) { set(map[indices.back()], std::forward<Args>(args)...); }
+    void set(CCMap<T>& map, Args&&... args)
+    {
+        if (map.contains(static_cast<int>(indices.back())))
+            set(map[indices.back()], std::forward<Args>(args)...);
+    }
 
     // Below are all methods that will fetch various data structure elements (regions,
     // egs, ...), check that they exist, and call an actual "concrete" reply
@@ -667,7 +677,7 @@ public:
     template <class T = unsigned>
     absl::optional<T> index(int i)
     {
-        if (i <= ssize(indices))
+        if (i >= 0 && i < ssize(indices))
             return static_cast<T>(indices[i]);
 
         return absl::nullopt;
@@ -678,7 +688,7 @@ public:
     absl::optional<int> checkCC(int i = 0)
     {
         auto cc = index(i);
-        return cc <= config::numCCs ? cc : absl::nullopt;
+        return cc < config::numCCs ? cc : absl::nullopt;
     }
 
     absl::optional<int> checkNote(int i = 0)
@@ -689,7 +699,7 @@ public:
 
 private:
     Client& client;
-    std::vector<unsigned> indices;
+    absl::InlinedVector<unsigned, maxIndices> indices;
     Synth::Impl& impl;
     int delay;
     const char* path;

@@ -204,9 +204,16 @@ bool getSIMDOpStatus<float>(SIMDOps op)
     return simdDispatch<float>().getStatus(op);
 }
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// dispatch table is set once per process. Every synth asks for it, also on a
+// worker thread while other synths render and read it.
 void initializeSIMDDispatchers()
 {
-    simdDispatch<float>().resetStatus();
+    static const bool initialized = [] {
+        simdDispatch<float>().resetStatus();
+        return true;
+    }();
+    (void)initialized;
 }
 
 ///

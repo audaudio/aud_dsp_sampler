@@ -1,3 +1,6 @@
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// synth keeps the samples and the parser errors of its last load.
+
 #pragma once
 
 #include "Synth.h"
@@ -332,6 +335,11 @@ struct Synth::Impl final: public Parser::Listener {
 
     // Root path
     std::string rootPath_;
+
+    // The samples of regions the last load dropped because it could not
+    // read them, and the errors of its parser (aud_dsp_sampler, ticket 25).
+    std::vector<std::string> missingSamples_;
+    std::vector<std::string> parseErrors_;
 
     // Control opcodes
     std::string defaultPath_ { "" };

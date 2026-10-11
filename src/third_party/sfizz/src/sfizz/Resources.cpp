@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// metronome, a debugging tool of sfizz, is gone.
+
 #include "Resources.h"
 #include "SynthConfig.h"
 #include "MidiState.h"
@@ -13,7 +16,6 @@
 #include "Curve.h"
 #include "Tuning.h"
 #include "BeatClock.h"
-#include "Metronome.h"
 #include "modulations/ModMatrix.h"
 
 namespace sfz {
@@ -29,7 +31,6 @@ struct Resources::Impl {
     absl::optional<StretchTuning> stretch;
     ModMatrix modMatrix;
     BeatClock beatClock;
-    Metronome metronome;
 };
 
 Resources::Resources()
@@ -47,7 +48,6 @@ void Resources::setSampleRate(float samplerate)
     impl.midiState.setSampleRate(samplerate);
     impl.modMatrix.setSampleRate(samplerate);
     impl.beatClock.setSampleRate(samplerate);
-    impl.metronome.init(samplerate);
 }
 
 void Resources::setSamplesPerBlock(int samplesPerBlock)
@@ -66,7 +66,6 @@ void Resources::clearNonState()
     impl.filePool.clear();
     impl.wavePool.clearFileWaves();
     impl.modMatrix.clear();
-    impl.metronome.clear();
 }
 
 void Resources::clearState()
@@ -126,11 +125,6 @@ const ModMatrix& Resources::getModMatrix() const noexcept
 const BeatClock& Resources::getBeatClock() const noexcept
 {
     return impl_->beatClock;
-}
-
-const Metronome& Resources::getMetronome() const noexcept
-{
-    return impl_->metronome;
 }
 
 } // namespace sfz

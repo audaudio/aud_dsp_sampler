@@ -76,6 +76,13 @@ public:
      */
     std::unique_ptr<Effect> makeEffect(absl::Span<const Opcode> members);
 
+    /**
+       @brief The effect types makeEffect did not know since the last clear;
+       their effects pass the signal through (aud_dsp_sampler, ticket 25).
+     */
+    const std::vector<std::string>& unsupportedTypes() const noexcept { return _unsupported; }
+    void clearUnsupportedTypes() noexcept { _unsupported.clear(); }
+
 private:
     struct FactoryEntry {
         std::string name;
@@ -83,6 +90,7 @@ private:
     };
 
     std::vector<FactoryEntry> _entries;
+    std::vector<std::string> _unsupported;
 };
 
 /**

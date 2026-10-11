@@ -6,3 +6,5 @@
 dependency_overrides:
   aud_audio_core:
     path: ../aud_audio_core
+  aud_audio_graph:
+    path: ../aud_audio_graph

@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// messages that add filters, equalizers, envelopes and envelope points are
+// gone. They grew the regions and the voices on the audio thread; an
+// instrument with more of them loads again on a worker thread.
+
 #include "Defaults.h"
 #include "Region.h"
 #include "SynthMessagingHelper.hpp"
@@ -483,15 +488,6 @@ void sfz::Synth::dispatchMessage(Client& client, int delay, const char* path, co
                     if (effectIdx > 0 && effectIdx < ssize(region->gainToEffect))
                         m.set(region->gainToEffect[*effectIdx], Default::effect);
         } break;
-        MATCH("/region&/add_filter", "") {
-            if (auto region = m.getRegion()) {
-                region->filters.emplace_back();
-                int32_t index = region->filters.size() - 1;
-                impl.settingsPerVoice_.maxFilters = max(impl.settingsPerVoice_.maxFilters, region->flexEGs.size());
-                impl.applySettingsPerVoice();
-                m.reply(index);
-            }
-        } break;
         MATCH("/region&/filter&/cutoff", "") { m.reply(&FilterDescription::cutoff); } break;
         MATCH("/region&/filter&/cutoff", "f") { m.set(&FilterDescription::cutoff, Default::filterCutoff); } break;
         MATCH("/region&/filter&/cutoff_cc&", "") { m.reply(ModId::FilCutoff, ModParam::Depth); } break;
@@ -515,15 +511,6 @@ void sfz::Synth::dispatchMessage(Client& client, int delay, const char* path, co
         MATCH("/region&/filter&/type", "") { m.reply(&FilterDescription::type); } break;
         MATCH("/region&/filter&/type", "s") { m.set(&FilterDescription::type, Default::filter); } break;
         //----------------------------------------------------------------------
-        MATCH("/region&/add_eq", "") {
-            if (auto region = m.getRegion()) {
-                region->equalizers.emplace_back();
-                int32_t index = region->equalizers.size() - 1;
-                impl.settingsPerVoice_.maxEQs = max(impl.settingsPerVoice_.maxEQs, region->flexEGs.size());
-                impl.applySettingsPerVoice();
-                m.reply(index);
-            }
-        } break;
         MATCH("/region&/eq&/gain", "") { m.reply(&EQDescription::gain); } break;
         MATCH("/region&/eq&/gain", "f") { m.set(&EQDescription::gain, Default::eqGain); } break;
         MATCH("/region&/eq&/bandwidth", "") { m.reply(&EQDescription::bandwidth); } break;
@@ -542,25 +529,6 @@ void sfz::Synth::dispatchMessage(Client& client, int delay, const char* path, co
         MATCH("/region&/lfo&/wave&", "") { m.reply(&LFODescription::Sub::wave); } break;
         MATCH("/region&/lfo&/wave&", "i") { m.set(&LFODescription::Sub::wave, Default::lfoWave); } break;
         //----------------------------------------------------------------------
-        MATCH("/region&/add_eg", "") {
-            if (auto region = m.getRegion()) {
-                region->flexEGs.emplace_back();
-                region->flexEGs.back().points.emplace_back();
-                int32_t index = region->flexEGs.size() - 1;
-                impl.settingsPerVoice_.maxFlexEGs = max(impl.settingsPerVoice_.maxFlexEGs, region->flexEGs.size());
-                impl.applySettingsPerVoice();
-                m.reply(index);
-            }
-        } break;
-        MATCH("/region&/eg&/add_point", "") {
-            if (auto region = m.getRegion()) {
-                if (auto eg = m.getEG(*region)) {
-                    eg->points.emplace_back();
-                    int32_t index = eg->points.size() - 2;
-                    m.reply(index);
-                }
-            }
-        } break;
         MATCH("/region&/eg&/point&/time", "") { m.reply(&FlexEGPoint::time); } break;
         MATCH("/region&/eg&/point&/time", "f") { m.set(&FlexEGPoint::time, Default::flexEGPointTime); } break;
         MATCH("/region&/eg&/point&/time_cc&", "") { m.reply(&FlexEGPoint::ccTime); } break;

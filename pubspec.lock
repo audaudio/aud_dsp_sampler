@@ -40,8 +40,15 @@ packages:
       relative: true
     source: path
     version: "0.4.0"
+  aud_audio_graph:
+    dependency: "direct dev"
+    description:
+      path: "../aud_audio_graph"
+      relative: true
+    source: path
+    version: "0.4.0"
   aud_midi_standard:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       path: "."
       resolved-ref: b45c6aa1cd74b7074be43ba0ff34fb939eec417d
@@ -370,7 +377,7 @@ packages:
     source: hosted
     version: "0.12.20"
   meta:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: meta
       sha256: "307249ce4ff29d58a18e97f6345f539382eb9c9c29ecda628900f31de0443dd9"
@@ -474,7 +481,7 @@ packages:
     source: hosted
     version: "4.1.0"
   record_use:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: record_use
       sha256: "1cb8564af8d43b464294411db9217f5ec04891c6f22ee2c32d73ae05e88a6bd2"

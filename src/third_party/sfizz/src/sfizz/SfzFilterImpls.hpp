@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// resonant, peaking and shelving filters come from RbjFilters.hpp, written
+// from the Audio EQ Cookbook, instead of the Faust-generated classes.
+
 struct Meta {};
 struct UI {};
 
@@ -42,61 +46,34 @@ protected:
 
 #include "gen/filters/sfzApf1p.hxx"
 #include "gen/filters/sfzBpf1p.hxx"
-#include "gen/filters/sfzBpf2p.hxx"
-#include "gen/filters/sfzBpf4p.hxx"
-#include "gen/filters/sfzBpf6p.hxx"
 #include "gen/filters/sfzBrf1p.hxx"
-#include "gen/filters/sfzBrf2p.hxx"
 #include "gen/filters/sfzHpf1p.hxx"
-#include "gen/filters/sfzHpf2p.hxx"
-#include "gen/filters/sfzHpf4p.hxx"
-#include "gen/filters/sfzHpf6p.hxx"
 #include "gen/filters/sfzLpf1p.hxx"
-#include "gen/filters/sfzLpf2p.hxx"
-#include "gen/filters/sfzLpf4p.hxx"
-#include "gen/filters/sfzLpf6p.hxx"
 #include "gen/filters/sfzPink.hxx"
 #include "gen/filters/sfzLpf2pSv.hxx"
 #include "gen/filters/sfzHpf2pSv.hxx"
 #include "gen/filters/sfzBpf2pSv.hxx"
 #include "gen/filters/sfzBrf2pSv.hxx"
-#include "gen/filters/sfzLsh.hxx"
-#include "gen/filters/sfzHsh.hxx"
-#include "gen/filters/sfzPeq.hxx"
-#include "gen/filters/sfzEqPeak.hxx"
-#include "gen/filters/sfzEqLshelf.hxx"
-#include "gen/filters/sfzEqHshelf.hxx"
 
 #include "gen/filters/sfz2chApf1p.hxx"
 #include "gen/filters/sfz2chBpf1p.hxx"
-#include "gen/filters/sfz2chBpf2p.hxx"
-#include "gen/filters/sfz2chBpf4p.hxx"
-#include "gen/filters/sfz2chBpf6p.hxx"
 #include "gen/filters/sfz2chBrf1p.hxx"
-#include "gen/filters/sfz2chBrf2p.hxx"
 #include "gen/filters/sfz2chHpf1p.hxx"
-#include "gen/filters/sfz2chHpf2p.hxx"
-#include "gen/filters/sfz2chHpf4p.hxx"
-#include "gen/filters/sfz2chHpf6p.hxx"
 #include "gen/filters/sfz2chLpf1p.hxx"
-#include "gen/filters/sfz2chLpf2p.hxx"
-#include "gen/filters/sfz2chLpf4p.hxx"
-#include "gen/filters/sfz2chLpf6p.hxx"
 #include "gen/filters/sfz2chPink.hxx"
 #include "gen/filters/sfz2chLpf2pSv.hxx"
 #include "gen/filters/sfz2chHpf2pSv.hxx"
 #include "gen/filters/sfz2chBpf2pSv.hxx"
 #include "gen/filters/sfz2chBrf2pSv.hxx"
-#include "gen/filters/sfz2chLsh.hxx"
-#include "gen/filters/sfz2chHsh.hxx"
-#include "gen/filters/sfz2chPeq.hxx"
-#include "gen/filters/sfz2chEqPeak.hxx"
-#include "gen/filters/sfz2chEqLshelf.hxx"
-#include "gen/filters/sfz2chEqHshelf.hxx"
 
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
+
+// The RBJ biquads: 2-pole lowpass, highpass, bandpass, notch, peaking and
+// shelving filters and the 4-pole and 6-pole cascades, named like the Faust
+// output they replace
+#include "RbjFilters.hpp"
 
 /**
    Wrapper of the most common kind of resonant filter

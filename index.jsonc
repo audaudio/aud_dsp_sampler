@@ -6,16 +6,19 @@
 
 {
   "name": "aud_dsp_sampler",
-  "summary": "SFZ sampler node of the Audanika Audio Engine on the sfizz fork.",
+  "summary": "SFZ sampler node of the Audanika Audio Engine on the audaudio fork of sfizz.",
   "domain": [
-    "SFZ sampler node of the Audanika Audio Engine on the sfizz fork"
+    "SFZ sampler node aud.sampler.sfz: loads on engine workers with ids, standby synth with a 5 ms crossfade, UMP of MIDI 1.0 and 2.0, sfizz's message API",
+    "The audaudio fork of sfizz: one sample store per process, streams as engine tasks, trims to the sample cache budget, no allocation on the audio thread",
+    "Node presets of SFZ instruments, an instrument of generated samples for tests, a link hook that drops the library of an app that does not use it"
   ],
   "interfaces": {
     "uses": {
-      "aud_audio_core": "package dependency"
+      "aud_audio_core": "package dependency: the C ABI 0.4 and node presets",
+      "aud_audio_graph": "dev dependency: the engine of the native and golden tests"
     },
     "usedBy": {
-      "aud_audio": "example app plays the sfizz sampler"
+      "aud_audio": "the example app plays the sampler on its sampler page"
     }
   }
 }
