@@ -260,7 +260,10 @@ Preset und beweist den Link-Hook.
   bei `824afdc`, die der Linker zieht, und wird an Ort und Stelle
   geändert: Die Historie dieses Pakets ist die Historie des Forks. Jede
   geänderte Datei sagt in einem Vermerk "Modified by Audanika" unter ihrem
-  Lizenzkopf, was sich geändert hat.
+  Lizenzkopf, was sich geändert hat. Audanikas Code im Fork - diese
+  Änderungen und die neue Datei `RbjFilters.hpp` - steht wie sfizz unter
+  BSD-2-Clause, damit der Fork eine Lizenz hat und seine Korrekturen
+  upstream gehen können.
 - Der Build-Hook kompiliert die Quellen aus `SOURCES.txt` mit den
   Include-Verzeichnissen aus `INCLUDES.txt`. `NOTICES.md` nennt die
   Komponenten, ihre Lizenzen und das Ergebnis der Faust-Prüfung: Die

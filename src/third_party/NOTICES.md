@@ -8,14 +8,15 @@ commit 824afdc, "Update atomic_queue to v1.6.9") that the linker pulls, and
 has been changed in place since ticket 25. Every changed file of sfizz says
 so in a "Modified by Audanika" note below its license header.
 `fs_std_impl.cpp` is the one-line translation unit sfizz's build generates
-for the filesystem implementation. `sfizz/src/sfizz/RbjFilters.hpp` is
-Audanika's own code under the MIT license of this package, the `LICENSE`
-file in the root of the repository, not under sfizz's BSD-2-Clause license.
+for the filesystem implementation. Audanika's code in the fork - the
+changes the notes name and the new file `sfizz/src/sfizz/RbjFilters.hpp` -
+is under sfizz's BSD-2-Clause license (decision sampler-002), so that the
+fork has one license and its fixes can go upstream.
 
 | Component | Path | License |
 | --- | --- | --- |
-| sfizz | `sfizz/src/sfizz` except `RbjFilters.hpp`, `sfizz/src/sfizz.h` | BSD-2-Clause, `sfizz/LICENSE` |
-| RBJ filters of Audanika | `sfizz/src/sfizz/RbjFilters.hpp` | MIT, `LICENSE` of this package |
+| sfizz | `sfizz/src/sfizz`, `sfizz/src/sfizz.h` | BSD-2-Clause, `sfizz/LICENSE` |
+| Audanika's code in the fork | `sfizz/src/sfizz/RbjFilters.hpp` and the changes the "Modified by Audanika" notes name | BSD-2-Clause, Copyright (c) 2026 Audanika, header of `RbjFilters.hpp` |
 | Faust library functions | `sfizz/src/sfizz/gen/filters`, `sfizz/src/sfizz/effects/gen`, `sfizz/src/sfizz/effects/impl/ResonantString*` | STK-4.3 (MIT-style), `sfizz/LICENSE-STK-4.3.md` |
 | Abseil | `sfizz/external/abseil-cpp` | Apache-2.0, `sfizz/external/abseil-cpp/LICENSE` |
 | ghc filesystem | `sfizz/external/filesystem` | MIT, `sfizz/external/filesystem/LICENSE` |

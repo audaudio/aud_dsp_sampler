@@ -251,6 +251,9 @@ proves the link hook.
   `824afdc` that the linker pulls and is changed in place: the history of
   this package is the history of the fork. Every changed file says what
   changed in a "Modified by Audanika" note below its license header.
+  Audanika's code in the fork - those changes and the new
+  `RbjFilters.hpp` - is BSD-2-Clause like sfizz, so that the fork has one
+  license and its fixes can go upstream.
 - The build hook compiles the sources of `SOURCES.txt` with the include
   directories of `INCLUDES.txt`. `NOTICES.md` names the components and
   their licenses, and the result of the Faust audit: the RBJ filters are
