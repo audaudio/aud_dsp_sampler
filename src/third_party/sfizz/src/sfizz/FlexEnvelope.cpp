@@ -307,6 +307,10 @@ bool FlexEnvelope::Impl::advanceToStage(unsigned stageNumber)
 
 bool FlexEnvelope::Impl::advanceToNextStage()
 {
+    // The fade of a voice turned off is the last stage (aud_dsp_sampler,
+    // ticket 27).
+    if (offStage_)
+        return advanceToStage(static_cast<unsigned>(desc_->points.size()));
     return advanceToStage(currentStageNumber_ + 1);
 }
 
@@ -323,12 +327,12 @@ void FlexEnvelope::Impl::updateCurrentTimeAndLevel(int delay)
 }
 
 // The fade of a voice turned off: one linear stage from the current level
-// to zero, as the last stage, so that the envelope finishes after it.
+// to zero, after which advanceToNextStage() finishes the envelope. It keeps
+// the number of the stage it interrupts, so that it computes no stage
+// number of its own, also for an EG without points.
 void FlexEnvelope::Impl::enterOffStage()
 {
-    const FlexEGDescription& desc = *desc_;
     offStage_ = true;
-    currentStageNumber_ = static_cast<unsigned>(desc.points.size()) - 1;
     stageSourceLevel_ = currentLevel_;
     stageTargetLevel_ = 0.0f;
     stageTime_ = offTime_;

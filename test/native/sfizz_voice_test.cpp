@@ -223,3 +223,25 @@ AUD_TEST(sfizz_voice_stolen_with_a_flex_eg_fades_quickly) {
     }
   }
 }
+
+AUD_TEST(sfizz_voice_turned_off_with_an_empty_flex_eg_ends_cleanly) {
+  // eg1_ampeg=1 without points: the flex EG replaces the ADSR but has no
+  // stage, so its voice is silent and ends with its first block. A voice
+  // stolen or turned off fast in that block ends with it too, from any
+  // event and any off mode, and the stealing voice does the same.
+  for (const std::string& eg : {std::string("eg1_ampeg=1"), std::string("eg1_ampeg=1 eg1_dynamic=1"),
+                                std::string("eg1_ampeg=1 eg1_sustain=0")}) {
+    for (const std::string& offMode :
+         {std::string(), std::string(" off_mode=fast"), std::string(" off_mode=time off_time=0"),
+          std::string(" off_mode=time off_time=0.1"), std::string(" off_mode=normal")}) {
+      const Played played = play("polyphony=1 " + eg + offMode, 4, [](sfz::Synth& synth, int block) {
+        if (block != 0) return;
+        synth.noteOn(0, 60, 127);
+        synth.noteOn(kEventOffset, 62, 127);
+        synth.noteOff(kEventOffset + 1, 62, 0);
+      });
+      AUD_CHECK(played.voices[0] == 0);
+      AUD_CHECK(peak(played.left, 0, played.left.size()) == 0.0f);
+    }
+  }
+}

@@ -19,6 +19,9 @@
 - sustain_sw and sostenuto_sw each switch their own pedal; they were swapped
 - The tail of the node counts the release of a flex EG that replaces the ADSR
 - An empty APK asset reads as empty, one beyond the address space of a 32-bit process as unreadable
+- Add a clean end to the fade of an empty flex EG
+- The fade of a voice turned off ends its flex EG without a stage number of its own, also for an EG without points
+- A native test turns off voices with empty flex EGs in every off mode
 
 ## 0.2.0 - 2026-10-12
 
