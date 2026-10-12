@@ -22,11 +22,11 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      resolved-ref: ce762397921d02650b35069170f38ba17e7a82c3
+      resolved-ref: "28c43930245f81bb62431e839f85fc1446402a2f"
       tag-pattern: "{{version}}"
       url: "git@github.com:audaudio/aud_audio_graph.git"
     source: git
-    version: "0.5.0"
+    version: "0.5.1"
   aud_dsp_sampler:
     dependency: "direct main"
     description:
