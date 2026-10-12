@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-10-12
 
 ### Added
 
@@ -119,6 +119,7 @@
 - Add the BSD-2 license to Audanika code in the fork
 
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
+
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
 
 ## 0.1.0 - 2026-10-08
