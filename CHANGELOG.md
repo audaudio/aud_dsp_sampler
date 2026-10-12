@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add aud_midi_standard from pub.dev
+
+- aud_midi_standard ^0.1.0 hosted, as the aud_midi family resolves it (ticket 26)
+
 ## 0.2.0 - 2026-10-12
 
 ### Added
@@ -121,6 +129,7 @@
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
 
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
+
 
 ## 0.1.0 - 2026-10-08
 
