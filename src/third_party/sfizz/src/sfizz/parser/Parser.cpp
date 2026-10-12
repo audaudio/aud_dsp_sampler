@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
+// virtual path, e.g. "apk:/piano.sfz" for an asset of an Android APK, is
+// read from its backend and counts as absolute, so that its includes and
+// samples resolve inside the backend (VirtualFile.h).
+
 #include "Parser.h"
 #include "ParserListener.h"
 #include "ParserPrivate.h"
@@ -68,7 +73,8 @@ void Parser::parseVirtualFile(const fs::path& path, std::unique_ptr<Reader> read
 void Parser::includeNewFile(const fs::path& path, std::unique_ptr<Reader> reader, const SourceRange& includeStmtRange)
 {
     fs::path fullPath =
-        (path.empty() || path.is_absolute()) ? path : _originalDirectory / path;
+        (path.empty() || path.is_absolute() || VirtualFiles::isVirtual(path.string()))
+        ? path : _originalDirectory / path;
 
     if (_pathsIncluded.empty())
         _originalDirectory = fullPath.parent_path();
@@ -89,6 +95,18 @@ void Parser::includeNewFile(const fs::path& path, std::unique_ptr<Reader> reader
     if (_included.size() == _maxIncludeDepth) {
         emitError(makeErrorRange(), "Exceeded maximum include depth (" + std::to_string(_maxIncludeDepth) + ")");
         return;
+    }
+
+    if (!reader && VirtualFiles::isVirtual(fullPath.string())) {
+        std::unique_ptr<VirtualFileData> data = VirtualFiles::open(fullPath.string());
+        if (!data) {
+            const std::string why = VirtualFiles::backendOf(fullPath.string())
+                ? "Cannot open file for reading: "
+                : "No backend serves " + VirtualFiles::schemeOf(fullPath.string()) + ":/ paths on this platform: ";
+            emitError(makeErrorRange(), why + fullPath.string());
+            return;
+        }
+        reader = absl::make_unique<VirtualFileReader>(fullPath, std::move(data));
     }
 
     if (!reader) {

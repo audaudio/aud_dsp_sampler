@@ -20,6 +20,8 @@
 #include "Region.h"
 #include "Synth.h"
 
+#include "aud_apk_assets.hpp"
+
 namespace aud_sfz {
 namespace {
 
@@ -108,13 +110,29 @@ bool sameSynthConfig(const Config& a, const Config& b) {
          a.tuningFrequency == b.tuningFrequency && a.stretchTuning == b.stretchTuning;
 }
 
+// The release of a flex EG: the stages after its sustain point, each at
+// the longest time its controllers give it (ticket 27).
+float flexReleaseOf(const sfz::FlexEGDescription& eg) {
+  float seconds = 0;
+  for (size_t i = static_cast<size_t>(std::max(0, eg.sustain)) + 1; i < eg.points.size(); ++i) {
+    const sfz::FlexEGPoint& point = eg.points[i];
+    seconds += std::max(0.0f, point.time);
+    for (const auto& modulation : point.ccTime) seconds += std::max(0.0f, modulation.data);
+  }
+  return seconds;
+}
+
 // The longest amplitude release of an instrument at full velocity, in
-// seconds.
+// seconds: of the ADSR, or of the flex EG that replaces it (egN_ampeg).
 float releaseOf(const sfz::Synth& synth) {
   float longest = 0;
   for (int i = 0, count = synth.getNumRegions(); i < count; ++i) {
     const sfz::Region* region = synth.getRegionView(i);
     if (region == nullptr) continue;
+    if (region->flexAmpEG && *region->flexAmpEG < region->flexEGs.size()) {
+      longest = std::max(longest, flexReleaseOf(region->flexEGs[*region->flexAmpEG]));
+      continue;
+    }
     const sfz::EGDescription& eg = region->amplitudeEG;
     longest = std::max(longest, eg.release + std::max(0.0f, eg.vel2release));
   }
@@ -191,6 +209,16 @@ bool loadSource(sfz::Synth& synth, const Source& source, std::string& what) {
   return loaded;
 }
 
+// Why the paths of `source` cannot be read on this platform, e.g. an apk:/
+// path outside Android (ticket 27); empty when they can.
+std::string unavailableOf(const Source& source) {
+  std::string reason;
+  if (source.kind == Source::Kind::file) reason = unavailableReason(source.file);
+  if (source.kind == Source::Kind::text) reason = unavailableReason(source.virtualPath);
+  if (reason.empty()) reason = unavailableReason(source.scalaFile);
+  return reason;
+}
+
 // Why a load failed: what sfizz could not load and the first error of its
 // parser.
 std::string failureOf(const sfz::Synth& synth, const std::string& what) {
@@ -264,6 +292,11 @@ void runLoad(const LoadJob& job) {
     config = snapshot(shared);
     // A reload builds again what plays, not what a failed load named.
     source = job.load > 0 ? shared.source : shared.builtSource;
+  }
+  const std::string unavailable = unavailableOf(source);
+  if (!unavailable.empty()) {
+    endLoad(job, AUD_ERROR_UNSUPPORTED, unavailable.c_str());
+    return;
   }
   std::unique_ptr<sfz::Synth> synth(new sfz::Synth());
   configure(*synth, config);

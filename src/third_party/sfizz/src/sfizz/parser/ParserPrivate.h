@@ -4,10 +4,15 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
+// reader of a virtual file, e.g. an asset of an Android APK (VirtualFile.h).
+
 #pragma once
 #include "Parser.h"
+#include "../VirtualFile.h"
 #include "ghc/fs_std.hpp"
 #include "absl/strings/string_view.h"
+#include <memory>
 #include <string>
 #include <fstream>
 
@@ -117,6 +122,22 @@ protected:
 
 private:
     fs::ifstream _fileStream;
+};
+
+/**
+ * @brief Reader of a virtual file a backend serves (aud_dsp_sampler, ticket
+ * 27); owns the bytes of the file.
+ */
+class VirtualFileReader : public Reader {
+public:
+    VirtualFileReader(const fs::path& filePath, std::unique_ptr<VirtualFileData> data);
+
+protected:
+    int getNextStreamByte() override;
+
+private:
+    std::unique_ptr<VirtualFileData> _data;
+    size_t _position { 0 };
 };
 
 /**

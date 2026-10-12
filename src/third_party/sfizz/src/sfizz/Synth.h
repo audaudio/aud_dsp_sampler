@@ -9,6 +9,8 @@
 // and the first errors of its parser; restoreHdcc() sets a controller
 // without its reactions, and the smoothers of the controllers can start
 // from the values a host restored.
+// Ticket 27: an instrument without regions loads, unless its file cannot be
+// read or its parser reports an error; it plays nothing.
 
 #pragma once
 #include "AudioSpan.h"
@@ -107,7 +109,9 @@ public:
      *
      * @param file
      * @return true
-     * @return false if the file was not found or no regions were loaded.
+     * @return false if the file was not found, or if it has no regions and
+     *         its parser reported an error (aud_dsp_sampler: an instrument
+     *         without regions and without errors loads and plays nothing).
      */
     bool loadSfzFile(const fs::path& file);
     /**
@@ -121,8 +125,9 @@ public:
      * @param path The virtual path of the SFZ file, as string.
      * @param text The contents of the virtual SFZ file.
      *
-     * @return @false if no regions were loaded,
-     *         @true otherwise.
+     * @return @false if no regions were loaded and the parser reported an
+     *         error, @true otherwise (aud_dsp_sampler: an instrument without
+     *         regions and without errors loads and plays nothing).
      */
     bool loadSfzString(const fs::path& path, absl::string_view text);
     /**

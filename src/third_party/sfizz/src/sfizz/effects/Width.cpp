@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
+// block fills only the widths of its own frames.
+
 
 /**
    Note(jpc): this effect is book-only, mentioned but not documented
@@ -40,7 +43,7 @@ namespace fx {
     {
         const float baseWidth = _width;
 
-        absl::Span<float> widths = _tempBuffer.getSpan(0);
+        absl::Span<float> widths = _tempBuffer.getSpan(0).first(nframes);
         std::fill(widths.begin(), widths.end(), baseWidth);
 
         absl::Span<const float> input1 { inputs[0], nframes };

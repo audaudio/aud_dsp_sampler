@@ -9,14 +9,23 @@ has been changed in place since ticket 25. Every changed file of sfizz says
 so in a "Modified by Audanika" note below its license header.
 `fs_std_impl.cpp` is the one-line translation unit sfizz's build generates
 for the filesystem implementation. Audanika's code in the fork - the
-changes the notes name and the new file `sfizz/src/sfizz/RbjFilters.hpp` -
-is under sfizz's BSD-2-Clause license (decision sampler-002), so that the
-fork has one license and its fixes can go upstream.
+changes the notes name and the new files `sfizz/src/sfizz/RbjFilters.hpp`
+and `sfizz/src/sfizz/VirtualFile.h` with `VirtualFile.cpp` (ticket 27:
+files a backend serves, e.g. the assets of an APK below `apk:/`) - is under
+sfizz's BSD-2-Clause license (decision sampler-002), so that the fork has
+one license and its fixes can go upstream.
+
+The Abseil files are those of its release `20240116.0`
+(https://github.com/abseil/abseil-cpp, commit 4a2c633, the submodule of
+sfizz), unchanged.
+`absl/numeric/int128_no_intrinsic.inc` and `absl/numeric/int128.cc` came
+with ticket 27: a 32-bit target such as Android's `armeabi-v7a` has no
+128-bit integer of the compiler, and Abseil's `uint128` then needs them.
 
 | Component | Path | License |
 | --- | --- | --- |
 | sfizz | `sfizz/src/sfizz`, `sfizz/src/sfizz.h` | BSD-2-Clause, `sfizz/LICENSE` |
-| Audanika's code in the fork | `sfizz/src/sfizz/RbjFilters.hpp` and the changes the "Modified by Audanika" notes name | BSD-2-Clause, Copyright (c) 2026 Audanika, header of `RbjFilters.hpp` |
+| Audanika's code in the fork | `sfizz/src/sfizz/RbjFilters.hpp`, `sfizz/src/sfizz/VirtualFile.h`, `sfizz/src/sfizz/VirtualFile.cpp` and the changes the "Modified by Audanika" notes name | BSD-2-Clause, Copyright (c) 2026 Audanika, header of `RbjFilters.hpp` |
 | Faust library functions | `sfizz/src/sfizz/gen/filters`, `sfizz/src/sfizz/effects/gen`, `sfizz/src/sfizz/effects/impl/ResonantString*` | STK-4.3 (MIT-style), `sfizz/LICENSE-STK-4.3.md` |
 | Abseil | `sfizz/external/abseil-cpp` | Apache-2.0, `sfizz/external/abseil-cpp/LICENSE` |
 | ghc filesystem | `sfizz/external/filesystem` | MIT, `sfizz/external/filesystem/LICENSE` |

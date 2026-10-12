@@ -8,7 +8,9 @@
 // (src/sfizz/FilePool.cpp) on synths of their own, without the node: the
 // streams of files nobody holds while trims run, samples whose headers claim
 // more frames than sfizz counts or memory holds, a pool without a host, and
-// the samples a load cannot read, which it drops like missing ones.
+// the samples a load cannot read, which it drops like missing ones, and
+// the keys of the store, which share one file between the instruments that
+// reach it by different paths (ticket 27).
 //
 // The pools of these synths report their bytes to nobody. Each test first
 // lets the engine trim what the store holds for it, so that the store then
@@ -33,6 +35,7 @@
 #include "FilePool.h"
 #include "Synth.h"
 
+#include "aud_directory_backend.hpp"
 #include "aud_sampler_fixture.hpp"
 
 // The allocation limit of the fixture, for the whole binary.
@@ -455,5 +458,58 @@ AUD_TEST(sfizz_pool_drops_a_short_sample_it_cannot_read_whole) {
   AUD_CHECK(synth->loadSfzString(folder.file("short.sfz"), text));
   checkDropped(*synth, "short.wav");
   synth.reset();
+  trimTheStore();
+}
+
+// ############################################################################
+// The keys of the store
+
+AUD_TEST(sfizz_store_shares_a_sample_two_instruments_reach_by_different_paths) {
+  trimThroughTheEngine();
+  TempFolder folder;
+  folder.createFolder("samplesets/x/samples");
+  folder.createFolder("presets/a");
+  folder.createFolder("presets/b/deep");
+  writeWav(folder.file("samplesets/x/samples/060.wav"), sine(375, 0.1));
+  writeText(folder.file("presets/a/main.sfz"),
+            "<region> sample=../../samplesets/x/samples/060.wav key=60\n");
+  writeText(folder.file("presets/b/deep/main.sfz"),
+            "<control> default_path=../../../samplesets/x/\n"
+            "<region> sample=./samples/060.wav key=60\n");
+  const size_t before = sfz::SampleStore::get().size();
+  std::unique_ptr<sfz::Synth> a = synthOf();
+  std::unique_ptr<sfz::Synth> b = synthOf();
+  AUD_CHECK(a->loadSfzFile(folder.file("presets/a/main.sfz")));
+  AUD_CHECK(b->loadSfzFile(folder.file("presets/b/deep/main.sfz")));
+  AUD_CHECK(a->getNumRegions() == 1 && b->getNumRegions() == 1);
+  // One file in the store for both.
+  AUD_CHECK(sfz::SampleStore::get().size() == before + 1);
+  a.reset();
+  b.reset();
+  trimTheStore();
+}
+
+AUD_TEST(sfizz_store_shares_an_apk_sample_two_instruments_reach_by_different_paths) {
+  trimThroughTheEngine();
+  TempFolder folder;
+  folder.createFolder("content/samplesets/x/samples");
+  folder.createFolder("content/presets/a");
+  folder.createFolder("content/presets/b");
+  writeWav(folder.file("content/samplesets/x/samples/060.wav"), sine(375, 0.1));
+  writeText(folder.file("content/presets/a/main.sfz"),
+            "<region> sample=../../samplesets/x/samples/060.wav key=60\n");
+  writeText(folder.file("content/presets/b/main.sfz"),
+            "<control> default_path=../../samplesets/x/\n"
+            "<region> sample=./samples/060.wav key=60\n");
+  ScopedApkAssets assets(folder.path);
+  const size_t before = sfz::SampleStore::get().size();
+  std::unique_ptr<sfz::Synth> a = synthOf();
+  std::unique_ptr<sfz::Synth> b = synthOf();
+  AUD_CHECK(a->loadSfzFile("apk:/content/presets/a/main.sfz"));
+  AUD_CHECK(b->loadSfzFile("apk:/content/presets/b/main.sfz"));
+  AUD_CHECK(a->getNumRegions() == 1 && b->getNumRegions() == 1);
+  AUD_CHECK(sfz::SampleStore::get().size() == before + 1);
+  a.reset();
+  b.reset();
   trimTheStore();
 }

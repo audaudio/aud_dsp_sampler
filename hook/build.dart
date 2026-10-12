@@ -31,6 +31,7 @@ void main(List<String> args) async {
       assetName: 'src/${packageName}_bindings_generated.dart',
       sources: [
         'src/$packageName.cpp',
+        'src/aud_apk_assets.cpp',
         'src/aud_sfz_node.cpp',
         ...await listOf(input.packageRoot, '$sfizz/SOURCES.txt', sfizz),
       ],
@@ -45,6 +46,10 @@ void main(List<String> args) async {
         // sfizz's AVX objects carry no __AVX__ guard; on x86_64 the whole
         // library is built for AVX because a hook has no per-file flags.
         if (input.config.code.targetArchitecture == Architecture.x64) '-mavx',
+        // A symbol the library leaves undefined fails the link, not the
+        // load in the app: on armeabi-v7a, Abseil's 128-bit division was
+        // such a symbol (ticket 27).
+        if (android) '-Wl,--no-undefined',
       ],
       defines: const {
         'GHC_FILESYSTEM_FWD': null,
@@ -55,7 +60,9 @@ void main(List<String> args) async {
         'NOMINMAX': null,
       },
       libraries: [
-        if (android) ...['c++_static', 'c++abi', 'log', 'm'],
+        // `android` holds AAssetManager, through which apk:/ paths read the
+        // assets of the app (ticket 27).
+        if (android) ...['c++_static', 'c++abi', 'log', 'm', 'android'],
         if (apple) 'c++',
         if (!android && !apple) 'stdc++',
       ],

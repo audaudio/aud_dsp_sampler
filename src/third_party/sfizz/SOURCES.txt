@@ -4,6 +4,7 @@ external/abseil-cpp/absl/container/internal/raw_hash_set.cc
 external/abseil-cpp/absl/hash/internal/city.cc
 external/abseil-cpp/absl/hash/internal/hash.cc
 external/abseil-cpp/absl/hash/internal/low_level_hash.cc
+external/abseil-cpp/absl/numeric/int128.cc
 external/abseil-cpp/absl/strings/ascii.cc
 external/abseil-cpp/absl/strings/charconv.cc
 external/abseil-cpp/absl/strings/internal/charconv_bigint.cc
@@ -71,6 +72,7 @@ src/sfizz/Smoothers.cpp
 src/sfizz/Synth.cpp
 src/sfizz/SynthMessaging.cpp
 src/sfizz/Tuning.cpp
+src/sfizz/VirtualFile.cpp
 src/sfizz/Voice.cpp
 src/sfizz/VoiceManager.cpp
 src/sfizz/VoiceStealing.cpp

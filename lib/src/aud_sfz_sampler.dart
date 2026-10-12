@@ -13,7 +13,8 @@
 /// returns its id; the node plays the old instrument until the new one is
 /// loaded and swaps them with a crossfade of 5 ms. [sfzVirtualPath] starts
 /// no load: it names the path the samples of the next [sfzText] resolve
-/// against. An empty [sfzText] or [sfzFile] unloads the instrument.
+/// against. An empty [sfzText] or [sfzFile] unloads the instrument, as
+/// does one without regions, e.g. a text with only a comment.
 ///
 /// Messages to the node reach sfizz's message API (osc-001):
 /// `/graph/<g>/node/<n>/msg/region0/ampeg_attack f 0.1` becomes sfizz's

@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
+// block shorter than the block size of the synth is processed without a
+// failed size check, which printed to stderr on the audio thread.
 
 /**
    Note(jpc): this effect is book-only, mentioned but not documented
@@ -40,7 +43,7 @@ namespace fx {
     {
         const float baseGain = _gain;
 
-        absl::Span<float> gains = _tempBuffer.getSpan(0);
+        absl::Span<float> gains = _tempBuffer.getSpan(0).first(nframes);
         std::fill(gains.begin(), gains.end(), baseGain);
 
         // to linear

@@ -19,7 +19,9 @@
 // error), when none of its samples can be read, or with AUD_ERROR_CAPACITY
 // when the heads of its samples alone exceed the sample cache budget. A load
 // that ends well names the samples it could not read and the effect types
-// sfizz does not know, which pass the signal through.
+// sfizz does not know, which pass the signal through. On Android a path
+// "apk:/<path>" names an asset of the APK (ticket 27), read in place; the
+// includes and samples of such an SFZ file resolve inside the APK too.
 //
 // The samples live in one store per process that every node of every engine
 // shares: the head of every sample (8192 frames), pinned while an instrument
@@ -102,6 +104,15 @@ AUD_EXPORT int64_t aud_dsp_sampler_store_bytes(void);
 
 // [any thread] The sample files the store of the process keeps.
 AUD_EXPORT int32_t aud_dsp_sampler_store_files(void);
+
+// [control] Gives the sampler the assets of an Android app, an AAssetManager*:
+// a path "apk:/<path>" in sfz_file, scala_file or sfz_virtual_path, and
+// inside an SFZ file, then names an asset of the APK, read in place. The
+// Android plugin of the package calls it when the app process starts; an
+// app with its own JNI may call it instead. AUD_OK, AUD_ERROR_INVALID_ARGUMENT
+// for NULL, AUD_ERROR_UNSUPPORTED off Android, where a load of an apk:/ path
+// ends with AUD_ERROR_UNSUPPORTED.
+AUD_EXPORT int32_t aud_dsp_sampler_set_android_assets(void* asset_manager);
 
 #ifdef __cplusplus
 }

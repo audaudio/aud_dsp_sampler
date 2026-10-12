@@ -13,10 +13,13 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "aud_directory_backend.hpp"
 #include "aud_sampler_fixture.hpp"
 
 using namespace aud_sampler_test;
@@ -259,6 +262,74 @@ AUD_TEST(loads_an_sfz_file_and_finds_its_samples_beside_it) {
   AUD_CHECK_NEAR(peak(f.left, 256 + 480, 256 + 4800), kLevel, 0.002);
 }
 
+AUD_TEST(loads_an_instrument_from_apk_assets_and_plays_it) {
+  Fixture f;
+  TempFolder folder;
+  folder.createFolder("content/sfz/presets/x");
+  folder.createFolder("content/sfz/samples/piano");
+  // Longer than the head: a note streams the rest through the backend.
+  writeWav(folder.file("content/sfz/samples/piano/A4.wav"), sine(440, 1.0));
+  writeText(folder.file("content/sfz/common.sfz"), "<control> default_path=samples/piano/\n");
+  writeText(folder.file("content/sfz/presets/x/main.sfz"),
+            "#include \"../../common.sfz\"\n"
+            "<control> default_path=../../samples/piano/\n"
+            "<region> sample=a4.wav pitch_keycenter=69\n");
+  ScopedApkAssets assets(folder.path);
+  const int32_t node = f.sampler();
+  const int32_t id = f.loadFile(node, "apk:/content/sfz/presets/x/main.sfz");
+  AUD_CHECK(id > 0);
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  AUD_CHECK(f.load(id).result == AUD_OK);
+  AUD_CHECK(std::string(f.load(id).message).empty());
+  // The stream of the note reads the sample through the backend too.
+  f.renderOffline(256);
+  f.noteOn(node, 69);
+  f.renderOffline(24000);
+  AUD_CHECK(assets.backend->openedPaths.back() == "content/sfz/samples/piano/A4.wav");
+  AUD_CHECK(assets.backend->opens == 5);
+  AUD_CHECK_NEAR(frequencyOf(f.left, 256 + 12000, 256 + 24000), 440.0, 1.0);
+  AUD_CHECK_NEAR(peak(f.left, 256 + 12000, 256 + 24000), kLevel, 0.002);
+  AUD_CHECK(f.diagnostics(AUD_ERROR_UNDERFLOW, node) == 0);
+  // A Scala file from the assets too.
+  writeText(folder.file("content/sfz/wide.scl"), kWideScale);
+  const int32_t scala = aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_SCALA_FILE,
+                                             "apk:/content/sfz/wide.scl");
+  AUD_CHECK(scala > 0);
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  AUD_CHECK(f.load(scala).result == AUD_OK);
+}
+
+AUD_TEST(fails_an_apk_load_without_the_assets_of_an_android_app) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  const int32_t id = f.loadFile(node, "apk:/content/sfz/presets/x/main.sfz");
+  AUD_CHECK(id > 0);
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  AUD_CHECK(f.load(id).result == AUD_ERROR_UNSUPPORTED);
+  AUD_CHECK(std::string(f.load(id).message) ==
+            "apk:/ paths read the assets of an Android app, which this platform has none of: "
+            "apk:/content/sfz/presets/x/main.sfz");
+  // A text whose samples would live in the assets, and a Scala file there.
+  const int32_t text = f.loadText(node, "apk:/content/b.sfz", "<region> sample=b.wav\n");
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  AUD_CHECK(f.load(text).result == AUD_ERROR_UNSUPPORTED);
+  AUD_CHECK(std::string(f.load(text).message).find("apk:/content/b.sfz") != std::string::npos);
+  AUD_CHECK(aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_VIRTUAL_PATH,
+                                 folder.file("c.sfz").c_str()) == AUD_OK);
+  const int32_t scala = aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_SCALA_FILE,
+                                             "apk:/content/wide.scl");
+  AUD_CHECK(scala > 0);
+  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+  AUD_CHECK(f.load(scala).result == AUD_ERROR_UNSUPPORTED);
+  // The old instrument plays on.
+  f.renderOffline(256);
+  f.noteOn(node, 69);
+  f.renderOffline(4800);
+  AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 4800, 480), f.left.size()), 375.0, 1.0);
+}
+
 AUD_TEST(ends_a_failed_load_and_keeps_playing_the_instrument) {
   Fixture f;
   TempFolder folder;
@@ -355,19 +426,28 @@ AUD_TEST(unloads_the_instrument_with_an_empty_text) {
   Fixture f;
   TempFolder folder;
   const int32_t node = f.sampler();
-  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
-  f.renderOffline(256);
-  f.noteOn(node, 69);
-  f.renderOffline(2048);
-  const int32_t id = f.loadText(node, folder.file("a.sfz"), "");
-  AUD_CHECK(id > 0);
-  AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
-  AUD_CHECK(f.load(id).result == AUD_OK);
-  f.renderOffline(2048);
-  AUD_CHECK(peak(f.left, since(f, 2048, 256), f.left.size()) == 0.0f);
-  const Reply regions = ask(f, node, "/num_regions");
-  AUD_CHECK(regions.path == "/num_regions" && regions.ints.size() == 1 &&
-            regions.ints.front() == 0);
+  // A text with only a comment, a file with only a comment (ticket 27) and
+  // an empty text: each loads an instrument without regions, which
+  // silences the node.
+  writeText(folder.file("silent.sfz"), "// silent\n");
+  for (int kind = 0; kind < 3; ++kind) {
+    AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+    f.renderOffline(256);
+    f.noteOn(node, 69);
+    f.renderOffline(2048);
+    AUD_CHECK(peak(f.left, since(f, 2048, 256), f.left.size()) > 0.5f * kLevel);
+    const int32_t id = kind == 0   ? f.loadText(node, folder.file("a.sfz"), "// silent")
+                       : kind == 1 ? f.loadFile(node, folder.file("silent.sfz"))
+                                   : f.loadText(node, folder.file("a.sfz"), "");
+    AUD_CHECK(id > 0);
+    AUD_CHECK(aud_graph_wait_loads(f.graph, node, 10000) == AUD_OK);
+    AUD_CHECK(f.load(id).result == AUD_OK);
+    f.renderOffline(2048);
+    AUD_CHECK(peak(f.left, since(f, 2048, 256), f.left.size()) == 0.0f);
+    const Reply regions = ask(f, node, "/num_regions");
+    AUD_CHECK(regions.path == "/num_regions" && regions.ints.size() == 1 &&
+              regions.ints.front() == 0);
+  }
   // A Scala tuning without an instrument starts no load.
   AUD_CHECK(aud_graph_set_string(f.graph, node, AUD_SFZ_KEY_SCALA_TEXT, "") == AUD_OK);
   AUD_CHECK(aud_graph_set_string(f.graph, node, 99, "x") == AUD_ERROR_INVALID_ARGUMENT);
@@ -1133,6 +1213,48 @@ AUD_TEST(reports_the_release_as_its_tail) {
   f.renderOffline(28800);
   AUD_CHECK(peak(f.left, since(f, 28800, 4000), since(f, 28800, 4800)) > 0.1f * kLevel);
   AUD_CHECK(peak(f.left, since(f, 28800, 26400), f.left.size()) == 0.0f);
+}
+
+AUD_TEST(reports_the_release_of_a_flex_eg_as_its_tail) {
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  // A flex EG in place of the ADSR (eg1_ampeg): its release is the stages
+  // after its sustain point, 0.25 s and 0.25 s more as CC 1 rises
+  // (ticket 27).
+  AUD_CHECK(f.loadAndWait(
+      node, folder.file("a.sfz"),
+      loopInstrument(folder, "a", 375,
+                     "ampeg_release=0.1 eg1_ampeg=1 eg1_sustain=1 eg1_time1=0.01 eg1_level1=1 "
+                     "eg1_time2=0.25 eg1_time2_oncc1=0.25 eg1_level2=0.5 eg1_time3=0.25 "
+                     "eg1_level3=0")));
+  AUD_CHECK(aud_graph_output_tail(f.graph) == 36000);
+}
+
+AUD_TEST(renders_the_effects_in_blocks_shorter_than_the_largest) {
+  // The output stage of audanika_app's instruments, a limiting compressor
+  // and a gain that undoes sfizz's volume of -7.35 dB, in blocks shorter
+  // than the largest of the graph (ticket 27): no check of sfizz fails and
+  // writes to stderr on the audio thread - the rtsan build would catch the
+  // write -, and below the threshold the gain raises the level by 7.35 dB.
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  const std::string effects =
+      "<effect> bus=main type=comp comp_attack=0 comp_release=0.05 comp_ratio=50 "
+      "comp_threshold=-0.5 comp_stlink=0\n"
+      "<effect> bus=main type=gain gain=7.35\n";
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), effects + loopInstrument(folder, "a", 375)));
+  std::ostringstream captured;
+  std::streambuf* const stderrBuffer = std::cerr.rdbuf(captured.rdbuf());
+  f.renderOffline(256);
+  f.noteOn(node, 69);
+  for (const uint32_t block : {64u, 100u, 17u, 255u, 1u, 200u}) f.renderOffline(4800, block);
+  std::cerr.rdbuf(stderrBuffer);
+  AUD_CHECK(captured.str().empty());
+  AUD_CHECK_NEAR(peak(f.left, since(f, 4800), f.left.size()),
+                 kLevel * std::pow(10.0f, 7.35f / 20), 0.002);
+  AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 4800), f.left.size()), 375.0, 1.0);
 }
 
 AUD_TEST(reports_a_release_beyond_any_tail_as_the_longest_tail) {

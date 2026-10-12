@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
+// voice that is turned off, e.g. stolen, fades linearly from where it is
+// over a release time of its own (setReleaseTime) instead of running through
+// the stages after its sustain point; that release cannot be cancelled.
+
 /*
    Note(jpc): implementation status
 
@@ -29,6 +34,7 @@
 #include "Config.h"
 #include "SIMDHelpers.h"
 #include <absl/types/optional.h>
+#include <algorithm>
 
 namespace sfz {
 
@@ -52,12 +58,17 @@ struct FlexEnvelope::Impl {
     absl::optional<size_t> currentFramesUntilRelease_ { absl::nullopt };
     bool isReleased_ { false };
     bool freeRunning_ { false };
+    // The time of the fade of a voice turned off, below 0 without one, and
+    // whether the fade runs (aud_dsp_sampler, ticket 27).
+    float offTime_ { -1.0f };
+    bool offStage_ { false };
 
     //
     void process(absl::Span<float> out);
     bool advanceToStage(unsigned stageNumber);
     bool advanceToNextStage();
     void updateCurrentTimeAndLevel(int delay = 0);
+    void enterOffStage();
 };
 
 FlexEnvelope::FlexEnvelope(Resources &resources)
@@ -85,6 +96,8 @@ void FlexEnvelope::configure(const FlexEGDescription* desc)
     //
     impl.freeRunning_ = false;
     impl.isReleased_ = false;
+    impl.offTime_ = -1.0f;
+    impl.offStage_ = false;
 
     //
     impl.currentStageNumber_ = 0;
@@ -118,6 +131,10 @@ void FlexEnvelope::cancelRelease(unsigned delay)
     Impl& impl = *impl_;
     const FlexEGDescription& desc = *impl.desc_;
 
+    // A voice turned off stays off.
+    if (impl.offTime_ >= 0.0f)
+        return;
+
     if (impl.currentFramesUntilRelease_) {
         // Cancel the future release
         impl.currentFramesUntilRelease_ = absl::nullopt;
@@ -130,6 +147,14 @@ void FlexEnvelope::cancelRelease(unsigned delay)
     impl.isReleased_ = false;
     impl.advanceToStage(desc.sustain);
     impl.stageTargetLevel_ = impl.currentLevel_;
+}
+
+void FlexEnvelope::setReleaseTime(float timeInSeconds)
+{
+    Impl& impl = *impl_;
+    impl.offTime_ = std::max(0.0f, timeInSeconds);
+    // A fade that runs already starts again from where it is.
+    impl.offStage_ = false;
 }
 
 unsigned FlexEnvelope::getRemainingDelay() const noexcept
@@ -200,7 +225,12 @@ void FlexEnvelope::Impl::process(absl::Span<float> out)
         }
 
         // Perform stage transitions
-        if (isReleased_) {
+        if (isReleased_ && offTime_ >= 0.0f) {
+            // a voice turned off fades from where it is
+            if (!offStage_)
+                enterOffStage();
+        }
+        else if (isReleased_) {
             // on release, fast forward past the sustain stage
             const unsigned sustainStage = desc.sustain;
             while (currentStageNumber_ <= sustainStage) {
@@ -283,13 +313,28 @@ bool FlexEnvelope::Impl::advanceToNextStage()
 void FlexEnvelope::Impl::updateCurrentTimeAndLevel(int delay)
 {
     const FlexEGDescription& desc = *desc_;
-    if (currentStageNumber_ >= desc.points.size())
+    if (offStage_ || currentStageNumber_ >= desc.points.size())
         return;
 
     const FlexEGPoint& point = desc.points[currentStageNumber_];
     const MidiState& midiState = resources_->getMidiState();
     stageTargetLevel_ = point.getLevel(midiState, delay);
     stageTime_ = point.getTime(midiState, delay);
+}
+
+// The fade of a voice turned off: one linear stage from the current level
+// to zero, as the last stage, so that the envelope finishes after it.
+void FlexEnvelope::Impl::enterOffStage()
+{
+    const FlexEGDescription& desc = *desc_;
+    offStage_ = true;
+    currentStageNumber_ = static_cast<unsigned>(desc.points.size()) - 1;
+    stageSourceLevel_ = currentLevel_;
+    stageTargetLevel_ = 0.0f;
+    stageTime_ = offTime_;
+    currentTime_ = 0.0f;
+    stageSustained_ = false;
+    stageCurve_ = &Curve::getDefault();
 }
 
 } // namespace sfz
