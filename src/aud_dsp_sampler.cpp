@@ -6,141 +6,83 @@
 
 #include "aud_dsp_sampler.h"
 
-#include <algorithm>
-#include <cstdint>
-#include <new>
-#include <string>
+#include "FilePool.h"
 
-#include "sfizz.h"
+#include "aud_sfz_node.hpp"
 
 namespace {
 
 // ###########################################################################
 // aud.sampler.sfz
 
-struct SamplerNode {
-  sfizz_synth_t* synth = nullptr;
-  std::string virtualPath = "/aud_dsp_sampler/virtual.sfz";
-  uint32_t channels = 2;
+const AudBusDescriptor kOutputs[] = {
+    {sizeof(AudBusDescriptor), "out", "Output", AUD_BUS_MAIN, 2, 16, 2},
 };
 
-const AudParamDescriptor kSamplerParams[] = {
-    {sizeof(AudParamDescriptor), "volume", "Volume", "dB", -60.0f, 6.0f, 0.0f},
+const AudEventPortDescriptor kInputs[] = {
+    {sizeof(AudEventPortDescriptor), "midi", "MIDI",
+     AUD_EVENT_PORT_MIDI | AUD_EVENT_PORT_CONTROL, 0},
 };
 
-int midiValue(float value) {
-  return std::min(127, std::max(0, static_cast<int>(value * 127.0f + 0.5f)));
-}
-
-void* samplerCreate(const AudNodeDescriptor*, const AudHostApi* host) {
-  auto* node = new (std::nothrow) SamplerNode();
-  if (node == nullptr) return nullptr;
-  node->synth = sfizz_create_synth();
-  if (node->synth == nullptr) {
-    if (host != nullptr && host->log != nullptr) {
-      host->log(host->host, AUD_LOG_ERROR, "aud.sampler.sfz: sfizz not created");
-    }
-    delete node;
-    return nullptr;
-  }
-  return node;
-}
-
-void samplerDestroy(void* instance) {
-  auto* node = static_cast<SamplerNode*>(instance);
-  sfizz_free(node->synth);
-  delete node;
-}
-
-int32_t samplerPrepare(void* instance, double sampleRate, uint32_t maxFrames,
-                       uint32_t channels) {
-  auto* node = static_cast<SamplerNode*>(instance);
-  if (channels == 0 || channels % 2 != 0) return AUD_ERROR_INVALID_ARGUMENT;
-  node->channels = channels;
-  sfizz_set_sample_rate(node->synth, static_cast<float>(sampleRate));
-  sfizz_set_samples_per_block(node->synth, static_cast<int>(maxFrames));
-  return AUD_OK;
-}
-
-void samplerReset(void* instance) {
-  sfizz_all_sound_off(static_cast<SamplerNode*>(instance)->synth);
-}
-
-void samplerSetParam(void* instance, uint32_t index, float value) {
-  if (index == 0) sfizz_set_volume(static_cast<SamplerNode*>(instance)->synth, value);
-}
-
-void samplerEvent(void* instance, const AudEvent* event) {
-  sfizz_synth_t* synth = static_cast<SamplerNode*>(instance)->synth;
-  const int delay = static_cast<int>(event->sample_offset);
-  const int number = static_cast<int>(event->number);
-  switch (event->type) {
-    case AUD_EVENT_NOTE_ON:
-      sfizz_send_note_on(synth, delay, number, std::max(1, midiValue(event->value)));
-      break;
-    case AUD_EVENT_NOTE_OFF:
-      sfizz_send_note_off(synth, delay, number, 0);
-      break;
-    case AUD_EVENT_CONTROL:
-      sfizz_send_cc(synth, delay, number, midiValue(event->value));
-      break;
-    default:
-      break;
-  }
-}
-
-void samplerProcess(void* instance, const AudProcessContext* context) {
-  auto* node = static_cast<SamplerNode*>(instance);
-  sfizz_render_block(node->synth, const_cast<float**>(context->outputs),
-                     static_cast<int>(node->channels),
-                     static_cast<int>(context->frames));
-}
-
-int32_t samplerSetString(void* instance, uint32_t key, const char* value) {
-  auto* node = static_cast<SamplerNode*>(instance);
-  switch (key) {
-    case AUD_SFZ_SAMPLER_KEY_FILE:
-      return sfizz_load_file(node->synth, value) ? AUD_OK : AUD_ERROR_FAILED;
-    case AUD_SFZ_SAMPLER_KEY_VIRTUAL_PATH:
-      node->virtualPath = value;
-      return AUD_OK;
-    case AUD_SFZ_SAMPLER_KEY_TEXT:
-      return sfizz_load_string(node->synth, node->virtualPath.c_str(), value)
-                 ? AUD_OK
-                 : AUD_ERROR_FAILED;
-    default:
-      return AUD_ERROR_INVALID_ARGUMENT;
-  }
-}
-
-const AudNodeVTable kSamplerVTable = {
-    sizeof(AudNodeVTable), samplerCreate,   samplerDestroy, samplerPrepare,
-    samplerReset,          samplerSetParam, samplerEvent,   samplerProcess,
-    samplerSetString,
+const AudStringKeyDescriptor kKeys[] = {
+    {sizeof(AudStringKeyDescriptor), AUD_SFZ_KEY_FILE, "sfz_file", "SFZ file"},
+    {sizeof(AudStringKeyDescriptor), AUD_SFZ_KEY_VIRTUAL_PATH,
+     "sfz_virtual_path", "Virtual path of an SFZ text"},
+    {sizeof(AudStringKeyDescriptor), AUD_SFZ_KEY_TEXT, "sfz_text", "SFZ text"},
+    {sizeof(AudStringKeyDescriptor), AUD_SFZ_KEY_SCALA_FILE, "scala_file",
+     "Scala file"},
+    {sizeof(AudStringKeyDescriptor), AUD_SFZ_KEY_SCALA_TEXT, "scala_text",
+     "Scala text"},
 };
 
-const AudNodeDescriptor kSamplerDescriptor = {
+const AudNodeVTable kVTable = {
+    sizeof(AudNodeVTable), aud_sfz::create,    aud_sfz::destroy,
+    aud_sfz::prepare,      aud_sfz::reset,     aud_sfz::setParam,
+    aud_sfz::process,      aud_sfz::setString, nullptr,
+    aud_sfz::getTail,      nullptr,            nullptr,
+};
+
+const AudNodeDescriptor kDescriptor = {
     sizeof(AudNodeDescriptor),
     AUD_ABI_VERSION_MAJOR,
     AUD_ABI_VERSION_MINOR,
+    1,
     AUD_DSP_SAMPLER_SFZ_TYPE_ID,
-    "SFZ sampler (sfizz)",
-    AUD_NODE_CAP_VARIABLE_BLOCK | AUD_NODE_CAP_EVENTS | AUD_NODE_CAP_STRINGS,
+    "SFZ sampler",
+    "Audanika",
+    AUD_NODE_CAP_VARIABLE_BLOCK | AUD_NODE_CAP_EVENTS | AUD_NODE_CAP_STRINGS |
+        AUD_NODE_CAP_TAIL | AUD_NODE_CAP_TRANSPORT | AUD_NODE_CAP_MESSAGES,
+    0,
     0,
     1,
+    nullptr,
+    kOutputs,
     1,
-    kSamplerParams,
-    &kSamplerVTable,
+    0,
+    kInputs,
+    nullptr,
+    AUD_SFZ_NUM_PARAMS,
+    sizeof(kKeys) / sizeof(kKeys[0]),
+    aud_sfz::kParams,
+    kKeys,
+    &kVTable,
 };
 
 }  // namespace
 
-AUD_EXPORT int32_t aud_dsp_sampler_register(const void* host_api) {
-  const auto* host = static_cast<const AudHostApi*>(host_api);
-  if (host == nullptr || host->struct_size < sizeof(AudHostApi) ||
-      host->register_node_type == nullptr) {
+AUD_EXPORT int32_t aud_dsp_sampler_register(const AudHostApi* host) {
+  if (host == nullptr || host->register_node_type == nullptr) {
     return AUD_ERROR_INVALID_ARGUMENT;
   }
   if (host->abi_major != AUD_ABI_VERSION_MAJOR) return AUD_ERROR_ABI_MAJOR;
-  return host->register_node_type(host->host, &kSamplerDescriptor);
+  if (host->struct_size < sizeof(AudHostApi)) return AUD_ERROR_ABI_MINOR;
+  return host->register_node_type(host->host, &kDescriptor);
+}
+
+AUD_EXPORT int64_t aud_dsp_sampler_store_bytes(void) {
+  return sfz::SampleStore::get().bytes();
+}
+
+AUD_EXPORT int32_t aud_dsp_sampler_store_files(void) {
+  return static_cast<int32_t>(sfz::SampleStore::get().size());
 }

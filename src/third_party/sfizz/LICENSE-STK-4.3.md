@@ -1,0 +1,57 @@
+# STK 4.3.0 License
+
+Parts of the Faust-generated code of sfizz under `src/sfizz/gen/filters`,
+`src/sfizz/effects/gen` and `src/sfizz/effects/impl` (`ResonantString`,
+`ResonantStringSSE` and `ResonantStringAVX`, the strings effect) come from
+functions of the Faust libraries that are licensed under the STK-4.3
+license, an MIT-style license. At the commits of faustlibraries that the
+generating Faust versions pin (`127e5bf` for Faust 2.20.2, `cde5c7b` for
+2.30.5, `0dce1a5` for 2.37.3), the libraries declare these copyright notices
+for them:
+
+- Copyright (C) 2003-2019 by Julius O. Smith III <jos@ccrma.stanford.edu>:
+  the functions of filters.lib (`tf22t`, `iir`, `fir`, `dcblockerat`,
+  `zero`, `pole`, `allpass_comb`, `bandpass`, `nlf2`, `wgr`) and
+  `gate_gain_mono` of misceffects.lib
+- Copyright (C) 2003-2017 by Julius O. Smith III <jos@ccrma.stanford.edu>:
+  `smooth` of signals.lib, `tau2pole` of basics.lib, `amp_follower` and
+  `amp_follower_ud` of analyzers.lib, and `pink_filter` of noises.lib
+- Copyright (C) 2014-2020 by Julius O. Smith III <jos@ccrma.stanford.edu>:
+  `compression_gain_mono` of compressors.lib
+
+`sallenKey2ndOrder` of vaeffects.lib names Eric Tarr as its author, `lag_ud`
+of signals.lib and `amp_follower_ar` of analyzers.lib name Jonatan
+Liljedahl; the libraries declare no copyright line of their own for these
+three. The license, as the Faust libraries ship it in
+`licenses/stk-4.3.0.md`:
+
+---
+
+The Synthesis ToolKit in C++ (STK)
+
+Copyright (c) 1995--2017 Perry R. Cook and Gary P. Scavone
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+Any person wishing to distribute modifications to the Software is asked to
+send the modifications to the original developer so that they can be
+incorporated into the canonical version.  This is, however, not a binding
+provision of this license.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+STK WWW site: http://ccrma.stanford.edu/software/stk/

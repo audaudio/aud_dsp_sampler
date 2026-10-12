@@ -13,6 +13,14 @@ headers:
 compiler-opts:
   - '-I../aud_audio_core/src'
 ffi-native:
+library-imports:
+  core: 'package:aud_audio_core/aud_audio_core_bindings.dart'
+type-map:
+  structs:
+    AudHostApi:
+      lib: core
+      c-type: AudHostApi
+      dart-type: AudHostApi
 preamble: |
   // @license
   // Copyright (c) Audanika. All Rights Reserved.

@@ -1,3 +1,6 @@
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
+// set lets go of a region the load drops.
+
 #include "RegionSet.h"
 
 sfz::RegionSet::RegionSet(RegionSet* parentSet, OpcodeScope level)
@@ -17,6 +20,13 @@ void sfz::RegionSet::addRegion(Region* region) noexcept
 {
     if (absl::c_find(regions, region) == regions.end())
         regions.push_back(region);
+}
+
+void sfz::RegionSet::removeRegion(const Region* region) noexcept
+{
+    const auto it = absl::c_find(regions, region);
+    if (it != regions.end())
+        regions.erase(it);
 }
 
 void sfz::RegionSet::addSubset(RegionSet* group) noexcept

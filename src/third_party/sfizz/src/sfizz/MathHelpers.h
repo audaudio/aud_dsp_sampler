@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): i0()
+// is a power series of its own instead of the function of cephes, whose
+// license was a permission e-mail, and gives every platform the same values;
+// the state of fast_rand is atomic.
+
 /**
  * @file MathHelpers.h
  * @brief Contains math helper functions and math constants
@@ -19,6 +24,7 @@
 #include <random>
 #include <limits>
 #include <type_traits>
+#include <atomic>
 #include <cmath>
 #include <cfenv>
 #include <simde/simde-features.h>
@@ -26,12 +32,24 @@
 #include <simde/x86/sse.h>
 #endif
 
-#if __cplusplus >= 201703L && defined(__cpp_lib_math_special_functions)
-static double i0(double x) { return std::cyl_bessel_i(0.0, x); }
-#else
-// external Bessel function from cephes
-extern "C" double i0(double x);
-#endif
+// The modified Bessel function of the first kind and order 0 by its power
+// series I0(x) = sum over k of ((x/2)^k / k!)^2 (Abramowitz and Stegun,
+// 9.6.12), which converges for every x; the Kaiser windows of the sinc
+// interpolator ask for arguments up to a few dozen.
+static double i0(double x)
+{
+    const double half = 0.5 * x;
+    double term = 1.0;
+    double sum = 1.0;
+    for (int k = 1; k < 500; ++k) {
+        const double factor = half / k;
+        term *= factor * factor;
+        sum += term;
+        if (term < sum * 1e-17)
+            break;
+    }
+    return sum;
+}
 
 template <class T>
 constexpr T max(T op1, T op2)
@@ -618,6 +636,10 @@ private:
 
 /**
  * @brief A low-quality random number generator guaranteed to be very fast
+ *
+ * The state is atomic: Random::randomGenerator below exists once per
+ * translation unit, and synths are built on worker threads while others
+ * render; draws at the same time may repeat a number, but they do not race.
  */
 class fast_rand {
 public:
@@ -644,14 +666,14 @@ public:
 
     uint32_t operator()() noexcept
     {
-        uint32_t next = mem * 1664525u + 1013904223u; // Numerical Recipes
-        mem = next;
+        uint32_t next = mem.load(std::memory_order_relaxed) * 1664525u + 1013904223u; // Numerical Recipes
+        mem.store(next, std::memory_order_relaxed);
         return next;
     }
 
     void seed(uint32_t value = 0) noexcept
     {
-        mem = value;
+        mem.store(value, std::memory_order_relaxed);
     }
 
     void discard(unsigned long long z) noexcept
@@ -661,7 +683,7 @@ public:
     }
 
 private:
-    uint32_t mem = 0;
+    std::atomic<uint32_t> mem { 0 };
 };
 
 /**

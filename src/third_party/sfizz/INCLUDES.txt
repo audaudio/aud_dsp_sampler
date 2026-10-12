@@ -1,5 +1,4 @@
 external/abseil-cpp
-external/atomic_queue/include
 external/filesystem/include
 external/invoke.hpp/headers
 external/jsl/include
@@ -9,7 +8,6 @@ external/st_audiofile/thirdparty/dr_libs
 external/st_audiofile/thirdparty/libaiff
 external/st_audiofile/thirdparty/stb_vorbis
 external/st_audiofile/thirdparty/wavpack/include
-external/threadpool
 src
 src/external/cpuid/platform/src
 src/external/cpuid/src
@@ -20,4 +18,3 @@ src/external/spline
 src/external/tunings/include
 src/sfizz
 src/sfizz/utility/bit_array
-src/sfizz/utility/spin_mutex

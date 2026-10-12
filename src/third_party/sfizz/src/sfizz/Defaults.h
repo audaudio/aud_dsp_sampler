@@ -23,6 +23,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// specs of the fverb opcodes are gone with the effect.
+
 #pragma once
 #include <limits>
 #include <cstdint>
@@ -341,10 +344,6 @@ namespace Default
     extern const OpcodeSpec<bool> compSTLink;
     extern const OpcodeSpec<float> compRatio;
     extern const OpcodeSpec<float> compGain;
-    extern const OpcodeSpec<float> fverbSize;
-    extern const OpcodeSpec<float> fverbPredelay;
-    extern const OpcodeSpec<float> fverbTone;
-    extern const OpcodeSpec<float> fverbDamp;
     extern const OpcodeSpec<float> gateAttack;
     extern const OpcodeSpec<float> gateRelease;
     extern const OpcodeSpec<bool> gateSTLink;

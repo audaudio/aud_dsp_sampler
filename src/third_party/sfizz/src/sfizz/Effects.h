@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// factory keeps the effect types it did not know since the last clear.
+
 #pragma once
 #include "AudioBuffer.h"
 #include "Defaults.h"
@@ -76,6 +79,13 @@ public:
      */
     std::unique_ptr<Effect> makeEffect(absl::Span<const Opcode> members);
 
+    /**
+       @brief The effect types makeEffect did not know since the last clear;
+       their effects pass the signal through (aud_dsp_sampler, ticket 25).
+     */
+    const std::vector<std::string>& unsupportedTypes() const noexcept { return _unsupported; }
+    void clearUnsupportedTypes() noexcept { _unsupported.clear(); }
+
 private:
     struct FactoryEntry {
         std::string name;
@@ -83,6 +93,7 @@ private:
     };
 
     std::vector<FactoryEntry> _entries;
+    std::vector<std::string> _unsupported;
 };
 
 /**

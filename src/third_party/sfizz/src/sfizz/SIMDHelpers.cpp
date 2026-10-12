@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// dispatch table of the SIMD helpers is set once per process.
+
 #include "SIMDHelpers.h"
 #include "SIMDConfig.h"
 #include "utility/Debug.h"
@@ -204,9 +207,15 @@ bool getSIMDOpStatus<float>(SIMDOps op)
     return simdDispatch<float>().getStatus(op);
 }
 
+// The dispatch table is set once per process: every synth asks for it, also
+// on a worker thread while other synths render and read it.
 void initializeSIMDDispatchers()
 {
-    simdDispatch<float>().resetStatus();
+    static const bool initialized = [] {
+        simdDispatch<float>().resetStatus();
+        return true;
+    }();
+    (void)initialized;
 }
 
 ///

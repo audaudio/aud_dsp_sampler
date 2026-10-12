@@ -12,7 +12,7 @@ import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:native_toolchain_c/native_toolchain_c.dart';
 
-// Builds the sampler node together with the vendored subset of sfizz: the
+// Builds the sampler node together with the package's fork of sfizz: the
 // sources in src/third_party/sfizz/SOURCES.txt and the include directories
 // in INCLUDES.txt, both relative to that directory. The sources mix C and
 // C++, so no language flag is passed - clang picks the language by file
@@ -31,6 +31,7 @@ void main(List<String> args) async {
       assetName: 'src/${packageName}_bindings_generated.dart',
       sources: [
         'src/$packageName.cpp',
+        'src/aud_sfz_node.cpp',
         ...await listOf(input.packageRoot, '$sfizz/SOURCES.txt', sfizz),
       ],
       includes: [
@@ -62,6 +63,14 @@ void main(List<String> args) async {
     await cbuilder.run(
       input: input,
       output: output,
+      // In profile and release builds the link hook decides whether the
+      // app uses the sampler (interop-001, ticket 25).
+      routing: [
+        if (input.config.linkingEnabled)
+          ToLinkHook(packageName)
+        else
+          const ToAppBundle(),
+      ],
       logger: Logger('')
         ..level = Level.ALL
         ..onRecord.listen((record) => stdout.writeln(record.message)),

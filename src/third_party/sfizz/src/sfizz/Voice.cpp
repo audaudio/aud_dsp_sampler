@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
+// voice whose file still streams plays silence past what the stream
+// delivered and keeps its position, instead of ending at the head. A voice
+// whose file the pool does not hold goes back to idle when it starts.
+
 #include "Voice.h"
 #include "Layer.h"
 #include "AudioBuffer.h"
@@ -480,7 +485,9 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
         FilePool& filePool = resources.getFilePool();
         impl.currentPromise_ = filePool.getFilePromise(region.sampleId);
         if (!impl.currentPromise_) {
-            impl.switchState(State::cleanMeUp);
+            // Idle at once: a voice left to clean up would render a block
+            // without its modulation targets (aud_dsp_sampler, ticket 25).
+            reset();
             return false;
         }
         impl.updateLoopInformation();
@@ -1075,7 +1082,22 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         return;
     }
 
+    // A file that still streams (aud_dsp_sampler, ticket 25): the voice runs
+    // on the file's true length; frames the stream has not delivered yet play
+    // silence instead of ending the voice, and a stream that could not be
+    // queued is asked for again. Whether the file is complete is read before
+    // its data: a stream that ends in between must not end the voice at the
+    // frames this block got.
+    const bool completeBefore = currentPromise_->isComplete();
     auto source = currentPromise_->getData();
+    const int available = static_cast<int>(source.getNumFrames());
+    const int fileFrames = static_cast<int>(currentPromise_->information.end) + 1;
+    const bool complete = completeBefore || available >= fileFrames;
+    const int trueFrames = complete ? available : fileFrames;
+    if (!complete && currentPromise_->status.load() == FileData::Status::Preloaded &&
+        !currentPromise_->unreadable.load())
+        resources_.getFilePool().requestStream(*currentPromise_);
+
     if (source.getNumFrames() == 0) {
         DBG("[Voice] Empty source in promise");
         return;
@@ -1118,7 +1140,7 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
     const auto loop = this->loop_;
 
     // Looping logic
-    const bool hasLoopSamples = static_cast<size_t>(loop.end) < source.getNumFrames();
+    const bool hasLoopSamples = loop.end < trueFrames;
     const bool loopCountReached = region_->loopCount && loop_.restarts >= *region_->loopCount;
     const bool loopContinuous = (region_->loopMode == LoopMode::loop_continuous);
     const bool loopSustain = (region_->loopMode == LoopMode::loop_sustain) && !released();
@@ -1162,7 +1184,7 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         numPartitions = 1;
     }
 
-    const auto sampleEnd = min( int(sampleEnd_), int(currentPromise_->information.end), int(source.getNumFrames())) - 1;
+    const auto sampleEnd = min( int(sampleEnd_), int(currentPromise_->information.end), trueFrames) - 1;
 
     int blockRestarts { 0 };
     int oldIndex {};
@@ -1231,6 +1253,28 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
                 fill<float>(coeffs->subspan(i), 0x1.fffffep-1);
                 break;
             }
+        }
+    }
+
+    // The frames past what the stream delivered read inside what there is
+    // and play silence; the voice keeps its true position (ticket 25). The
+    // interpolators read up to excessFileFrames around an index, which must
+    // not reach frames the stream still writes.
+    unsigned silentFrom = static_cast<unsigned>(numSamples);
+    const int truePosition = indices->back();
+    const float trueOffset = coeffs->back();
+    if (!complete) {
+        const int last = max(0, available - 1 - config::excessFileFrames);
+        for (unsigned i = 0; i < numSamples; ++i) {
+            if ((*indices)[i] > last) {
+                silentFrom = i;
+                break;
+            }
+        }
+        if (silentFrom < numSamples) {
+            fill<int>(indices->subspan(silentFrom), last);
+            fill<float>(coeffs->subspan(silentFrom), 0.0f);
+            resources_.getFilePool().countUnderflow();
         }
     }
 
@@ -1345,8 +1389,10 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         }
     }
 
-    sourcePosition_ = indices->back();
-    floatPositionOffset_ = coeffs->back();
+    sourcePosition_ = silentFrom < numSamples ? truePosition : indices->back();
+    floatPositionOffset_ = silentFrom < numSamples ? trueOffset : coeffs->back();
+    if (silentFrom < numSamples)
+        buffer.subspan(silentFrom).fill(0.0f);
 
 #if 1
     ASSERT(!hasNanInf(buffer.getConstSpan(0)));

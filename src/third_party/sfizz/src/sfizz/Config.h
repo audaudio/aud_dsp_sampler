@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// threads and the garbage collection period of the file pool are gone with
+// them, and a load keeps at most maxParseErrors errors of its parser.
+
 #pragma once
 #ifdef _WIN32
 // There's a spurious min/max function in MSVC that makes everything go badly...
@@ -32,8 +36,6 @@ namespace config {
     constexpr int voiceLoggerQueueSize { 256 };
     constexpr bool loggingEnabled { false };
     constexpr size_t maxChannels { 32 };
-    constexpr int numBackgroundThreads { 4 };
-    constexpr unsigned fileClearingPeriod { 5 }; // in seconds
     constexpr int numVoices { 64 };
     constexpr unsigned maxVoices { 256 };
     constexpr unsigned smoothingSteps { 512 };
@@ -58,6 +60,11 @@ namespace config {
     constexpr uint16_t numCCs { 512 };
     constexpr int maxCurves { 256 };
     constexpr int fileChunkSize { 1024 };
+    /**
+     * @brief The errors of its parser a load keeps; a large file that is no
+     *        SFZ text has an error on nearly every line.
+     */
+    constexpr size_t maxParseErrors { 16 };
     constexpr int processChunkSize { 16 };
     constexpr unsigned int defaultAlignment { 16 };
     constexpr int filtersInPool { maxVoices * 2 };

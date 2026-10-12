@@ -4,20 +4,29 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// tables of the interpolators are set once per process.
+
 #include "Interpolators.h"
 
 namespace sfz {
 
+// The tables are set once per process: every synth asks for them, also on a
+// worker thread while other synths render and read them.
 void initializeInterpolators()
 {
-    SincInterpolatorTraits<8>::initialize();
-    SincInterpolatorTraits<12>::initialize();
-    SincInterpolatorTraits<16>::initialize();
-    SincInterpolatorTraits<24>::initialize();
-    SincInterpolatorTraits<36>::initialize();
-    SincInterpolatorTraits<48>::initialize();
-    SincInterpolatorTraits<60>::initialize();
-    SincInterpolatorTraits<72>::initialize();
+    static const bool initialized = [] {
+        SincInterpolatorTraits<8>::initialize();
+        SincInterpolatorTraits<12>::initialize();
+        SincInterpolatorTraits<16>::initialize();
+        SincInterpolatorTraits<24>::initialize();
+        SincInterpolatorTraits<36>::initialize();
+        SincInterpolatorTraits<48>::initialize();
+        SincInterpolatorTraits<60>::initialize();
+        SincInterpolatorTraits<72>::initialize();
+        return true;
+    }();
+    (void)initialized;
 }
 
 } // namespace sfz

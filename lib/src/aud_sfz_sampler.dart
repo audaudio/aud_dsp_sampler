@@ -4,57 +4,97 @@
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
 
-import 'dart:ffi';
-
-import 'package:aud_audio_core/aud_audio_core.dart';
-
-import 'aud_dsp_sampler_bindings_generated.dart' as bindings;
-
 // #############################################################################
-/// The SFZ sampler node of the package, rendered by sfizz.
+/// The SFZ sampler node `aud.sampler.sfz` on the package's fork of sfizz:
+/// the ids of its parameters, string settings and event input, by which an
+/// engine addresses them (`graph.setParam(node, AudSfzSampler.volume, -6)`).
 ///
-/// Load an instrument with the string settings before the node enters the
-/// chain: sfizz loads only while no realtime call is in flight.
+/// A string setting starts a load on a worker thread of the engine and
+/// returns its id; the node plays the old instrument until the new one is
+/// loaded and swaps them with a crossfade of 5 ms. [sfzVirtualPath] starts
+/// no load: it names the path the samples of the next [sfzText] resolve
+/// against. An empty [sfzText] or [sfzFile] unloads the instrument.
+///
+/// Messages to the node reach sfizz's message API (osc-001):
+/// `/graph/<g>/node/<n>/msg/region0/ampeg_attack f 0.1` becomes sfizz's
+/// `/region0/ampeg_attack`. A message with a string or a blob argument is
+/// refused, since sfizz would copy or parse it on the audio thread.
 abstract final class AudSfzSampler {
-  /// The type id to create the node with.
-  static const String typeId = bindings.AUD_DSP_SAMPLER_SFZ_TYPE_ID;
+  /// The type id of the node.
+  static const String typeId = 'aud.sampler.sfz';
 
-  /// The index of the volume parameter in dB.
-  static const int volume = 0;
+  /// The version of the node type.
+  static const int version = 1;
 
-  /// The string key that loads an SFZ file from a path.
-  static const int sfzFile = bindings.AUD_SFZ_SAMPLER_KEY_FILE;
+  // ...........................................................................
+  // Parameters
 
-  /// The string key that sets the virtual path resolving the samples of
-  /// [sfzText].
-  static const int sfzVirtualPath = bindings.AUD_SFZ_SAMPLER_KEY_VIRTUAL_PATH;
+  /// The output gain in dB, -60 to +6, ramped; default 0.
+  static const String volume = 'volume';
 
-  /// The string key that loads SFZ text relative to [sfzVirtualPath].
-  static const int sfzText = bindings.AUD_SFZ_SAMPLER_KEY_TEXT;
-}
+  /// The voices of the node, 1 to 256; default 64. A change loads the
+  /// instrument again on a worker thread, and the notes that sound fade out.
+  static const String polyphony = 'polyphony';
 
-// #############################################################################
-/// Thrown when the package cannot register its node types.
-class AudDspSamplerException implements Exception {
-  /// Creates the exception for a result [code].
-  const AudDspSamplerException({required this.code});
+  /// sfizz's interpolation quality while it renders live, 0 to 10;
+  /// default 2. An offline render uses sfizz's best.
+  static const String sampleQuality = 'sample_quality';
 
-  /// The result code, one of the `AUD_ERROR_*` constants.
-  final int code;
+  /// The quality of sfizz's oscillators while it renders live, 0 to 3;
+  /// default 1.
+  static const String oscillatorQuality = 'oscillator_quality';
 
-  @override
-  String toString() =>
-      'AudDspSamplerException: registration failed with '
-      '${AudAbi.resultName(code)}';
-}
+  /// The frequency of A4 in Hz, 400 to 480; default 440. Like [polyphony],
+  /// a change loads the instrument again.
+  static const String tuningFrequency = 'tuning_frequency';
 
-// #############################################################################
-/// The registration of the package's node types with an engine.
-abstract final class AudDspSampler {
-  /// Registers the node types with the host api of an engine, e.g.
-  /// `AudEngine.hostApi`; throws when the engine refuses them.
-  static void register(Pointer<Void> hostApi) {
-    final result = bindings.aud_dsp_sampler_register(hostApi);
-    if (result != AUD_OK) throw AudDspSamplerException(code: result);
-  }
+  /// The piano stretch of sfizz, 0 to 1; default 0. A change loads the
+  /// instrument again.
+  static const String stretchTuning = 'stretch_tuning';
+
+  /// The parameter ids in the order of their indices.
+  static const List<String> params = [
+    volume,
+    polyphony,
+    sampleQuality,
+    oscillatorQuality,
+    tuningFrequency,
+    stretchTuning,
+  ];
+
+  // ...........................................................................
+  // String settings
+
+  /// Loads an SFZ file; the value is its path, or `asset:<id>` in a graph
+  /// document.
+  static const String sfzFile = 'sfz_file';
+
+  /// The path the samples of the next [sfzText] resolve against.
+  static const String sfzVirtualPath = 'sfz_virtual_path';
+
+  /// Loads SFZ text relative to [sfzVirtualPath].
+  static const String sfzText = 'sfz_text';
+
+  /// Loads a Scala tuning file with the instrument.
+  static const String scalaFile = 'scala_file';
+
+  /// Loads a Scala tuning given as text with the instrument.
+  static const String scalaText = 'scala_text';
+
+  /// The string ids in the order of their keys, which is also the order in
+  /// which a preset applies them.
+  static const List<String> strings = [
+    sfzFile,
+    sfzVirtualPath,
+    sfzText,
+    scalaFile,
+    scalaText,
+  ];
+
+  // ...........................................................................
+  // Events
+
+  /// The id of the event input: UMP of MIDI 1.0 and 2.0, numeric controls
+  /// as sfizz's CCs by number, and messages.
+  static const String midi = 'midi';
 }

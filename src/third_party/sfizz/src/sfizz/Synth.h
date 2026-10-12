@@ -4,6 +4,12 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): a
+// load names the samples it could not read, the effects it does not know
+// and the first errors of its parser; restoreHdcc() sets a controller
+// without its reactions, and the smoothers of the controllers can start
+// from the values a host restored.
+
 #pragma once
 #include "AudioSpan.h"
 #include "Resources.h"
@@ -171,6 +177,38 @@ public:
      * @return int
      */
     int getNumRegions() const noexcept;
+    /**
+     * @brief The samples of the regions the last load dropped because it
+     * could not find or read them.
+     */
+    const std::vector<std::string>& getMissingSamples() const noexcept;
+    /**
+     * @brief The first errors the parser found in the last load, at most
+     * config::maxParseErrors, e.g. "piano.sfz at line 3: ...".
+     */
+    const std::vector<std::string>& getParseErrors() const noexcept;
+    /**
+     * @brief The effect types of the last load sfizz does not know, e.g.
+     * "fverb"; their effects pass the signal through.
+     */
+    const std::vector<std::string>& getUnsupportedEffects() const noexcept;
+    /**
+     * @brief Sets the smoothers of the controllers to the values the
+     * controllers have now, e.g. after a host sent its controllers to a new
+     * synth, which then starts on them instead of gliding from the defaults.
+     *
+     * @par Thread-safety constraints
+     * - @b RT: the function must be invoked from the Real-time thread
+     */
+    void resetControllerSmoothers() noexcept;
+    /**
+     * @brief Sets a controller to the value a host had sent to another synth,
+     * without the reactions of a new value: no region it triggers starts.
+     *
+     * @par Thread-safety constraints
+     * - @b RT: the function must be invoked from the Real-time thread
+     */
+    void restoreHdcc(int ccNumber, float normValue) noexcept;
     /**
      * @brief Get the current number of groups loaded
      *

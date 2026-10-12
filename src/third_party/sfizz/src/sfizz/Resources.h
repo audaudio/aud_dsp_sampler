@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
+// metronome, a debugging tool of sfizz, is gone.
+
 #pragma once
 #include "absl/types/optional.h"
 #include <memory>
@@ -20,7 +23,6 @@ class Tuning;
 class StretchTuning;
 class ModMatrix;
 class BeatClock;
-class Metronome;
 
 class Resources
 {
@@ -56,7 +58,6 @@ public:
     ACCESSOR_RW(getStretch, absl::optional<StretchTuning>);
     ACCESSOR_RW(getModMatrix, ModMatrix);
     ACCESSOR_RW(getBeatClock, BeatClock);
-    ACCESSOR_RW(getMetronome, Metronome);
 
     #undef ACCESSOR_RW
 
