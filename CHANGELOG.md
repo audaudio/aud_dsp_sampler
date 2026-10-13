@@ -21,6 +21,17 @@
 - List AUD_RTSAN_CXX and AUD_LLVM_SYMBOLIZER in the usage of scripts/test-native.js
 - Describe the TSan symbolizer on macOS and the shared state of the synths in README.md and README.de.md
 - Raise the version in the installation of both READMEs to ^0.3.0
+- Add a faster MIDI flush, compressor and gain to the fork
+- Flush only the MIDI event vectors that received events since the last flush, from a list of fixed size
+- Call log10 in the compressor only above a level 1e-4 below the threshold and pow only for a gain other than 0 dB
+- Pass silence through a compressor at rest and skip the effects of a silent bus whose effects are at rest
+- Run the oversampling filters and detectors of both compressor channels in one loop on state in registers
+- Convert the gain of the gain effect once per block and a voice's pitch and volume modulation once per run of equal values
+- Add is_cleared to the oversampling filters of hiir
+- Add native tests that compare the MIDI state, the compressor, the gain and the effect bus with the original code bit for bit
+- Add the render of an app-like instrument and its golden from release 0.3.0
+- Add node scripts/test-native.js --bench, the micro-benchmark against release 0.3.0
+- List the changed files in NOTICES.md and describe the changes in README.md and README.de.md
 
 ## 0.3.0 - 2026-10-13
 

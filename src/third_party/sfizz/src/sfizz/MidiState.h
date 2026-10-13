@@ -4,9 +4,17 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm):
+// flushEvents() flushes only the event vectors that received an event since
+// the last flush, which a list of fixed size names; it flushed all 642 of
+// them in every block, a third of the sampler's time on an app's audio
+// thread. A vector no event reached holds its one event at delay 0 already,
+// which a flush keeps as it is.
+
 #pragma once
 #include <array>
 #include <bitset>
+#include <cstdint>
 #include "CCMap.h"
 #include "Range.h"
 
@@ -230,6 +238,33 @@ private:
      */
     void insertEventInVector(EventVector& events, int delay, float value);
 
+    /**
+     * @brief The slots of the event vectors in the list of those to flush:
+     * the CCs, then the polyphonic aftertouch of each note, the pitch bend
+     * and the channel aftertouch (Audanika, ticket 28).
+     */
+    static constexpr int polyAftertouchSlot { config::numCCs };
+    static constexpr int pitchSlot { polyAftertouchSlot + 128 };
+    static constexpr int channelAftertouchSlot { pitchSlot + 1 };
+    static constexpr int numEventSlots { channelAftertouchSlot + 1 };
+
+    /**
+     * @brief Notes that the event vector of a slot received an event, so that
+     * the next flush reaches it.
+     */
+    void markForFlush(int slot) noexcept
+    {
+        if (toFlush[slot])
+            return;
+        toFlush[slot] = true;
+        slotsToFlush[numSlotsToFlush++] = static_cast<uint16_t>(slot);
+    }
+
+    /**
+     * @brief The event vector of a slot.
+     */
+    EventVector& eventsOfSlot(int slot) noexcept;
+
     int activeNotes { 0 };
 
     /**
@@ -294,6 +329,14 @@ private:
      * @brief Polyphonic aftertouch status.
      */
     std::array<EventVector, 128> polyAftertouchEvents;
+
+    /**
+     * @brief The slots whose event vectors received events since the last
+     * flush, each once, and whether a slot is among them.
+     */
+    std::array<uint16_t, numEventSlots> slotsToFlush {};
+    std::array<bool, numEventSlots> toFlush {};
+    int numSlotsToFlush { 0 };
 
     /**
      * @brief Current midi program

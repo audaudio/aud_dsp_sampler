@@ -331,6 +331,15 @@ graph.setString(
   stb_vorbis und die CPU-Fähigkeiten von dr_flac und dr_mp3 - wird einmal
   gebaut, ist atomar oder wird von einem Mutex geschützt, den nur
   Ladevorgänge nehmen; `NOTICES.md` listet die Prüfung (Ticket 28).
+- Die Hot Spots des Audio-Threads einer App sind schneller, mit Bit für Bit
+  derselben Ausgabe (Ticket 28): Der MIDI-Zustand leert nur die
+  Event-Vektoren, die Events bekamen; der Kompressor ruft `log10` und `pow`
+  nur über seiner Schwelle und während er die Verstärkung senkt, und reicht
+  Stille durch, solange er ruht; der Gain-Effekt rechnet seine Verstärkung
+  einmal pro Block um; ein Bus mit stillem Eingang überspringt seine
+  ruhenden Effekte; eine Stimme rechnet ihre Tonhöhe und ihre
+  Lautstärkemodulation einmal pro Folge gleicher Werte um. `NOTICES.md`
+  listet die geänderten Dateien.
 - Die Bibliothek baut für jedes ABI von Android, auch für das 32-Bit-ABI
   `armeabi-v7a`, auf dem Abseils 128-Bit-Ganzzahl keinen Compilertyp hat
   und `int128.cc` braucht. Auf Android linkt sie mit `--no-undefined`: Ein
@@ -374,6 +383,19 @@ node scripts/test-native.js
   die beweist, dass er eine Allokation auf dem Audio-Thread fängt - und
   dem Thread-Sanitizer, unter dem Watchdog der Engine. Die Tests des Forks
   kompilieren wie sfizz als gnu++14.
+- Die Tests von Ticket 28 vergleichen den schnelleren Code mit dem
+  Original: den MIDI-Zustand mit dem ursprünglichen Leeren auf zufälligen
+  Event-Strömen, den Kompressor und den Gain mit ihrem ursprünglichen Code
+  auf lauten, leisen, stillen, transienten und einseitigen Signalen, und den
+  Render eines Instruments wie dem einer App mit
+  `test/goldens/sfizz_app_instrument.wav`, den Release 0.3.0 renderte.
+- `--bench` baut den Mikro-Benchmark `test/native/bench/sfizz_bench.cpp`
+  mit -O3 mit dem Fork von Release 0.3.0 (`AUD_BENCH_BASE` nennt eine
+  andere Git-Ref) und mit dem Fork von jetzt, gibt aus, was das Leeren des
+  MIDI-Zustands, der Kompressor, der Gain, ein ruhender Synth und vier
+  Synths pro Aufruf vorher und nachher kosten, und schlägt fehl, wenn die
+  Renders beider um mehr als 1e-6 abweichen; mit `UPDATE_GOLDENS=1`
+  schreibt er das Golden mit dem alten Fork.
 - `--help` listet die Optionen, `--only=asan|plain|rtsan|tsan` führt einen
   Build aus, und eine unbekannte Option beendet den Lauf mit Exit-Code 2.
   `AUD_TEST_FILTER` führt die Tests aus, deren Name ihn enthält;

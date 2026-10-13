@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): the
+// gain is converted to linear once per block and needs no buffer; a finite
+// gain is at rest.
+
 #pragma once
 #include "Effects.h"
 
@@ -37,13 +41,20 @@ namespace fx {
         void process(const float* const inputs[], float* const outputs[], unsigned nframes) override;
 
         /**
+          * @brief Whether the gain is finite: silence then stays silent
+          * (Audanika, ticket 28).
+          */
+        bool isAtRest() const override;
+
+        /**
           * @brief Instantiates given the contents of the <effect> block.
           */
         static std::unique_ptr<Effect> makeInstance(absl::Span<const Opcode> members);
 
     private:
+        float linearGain() const;
+
         float _gain = 0; // in dB
-        AudioBuffer<float, 1> _tempBuffer { 1, config::defaultSamplesPerBlock };
     };
 
 } // namespace fx

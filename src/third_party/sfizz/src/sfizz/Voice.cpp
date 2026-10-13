@@ -14,6 +14,10 @@
 // pedal each follow their own switch (sustain_sw, sostenuto_sw), which
 // were swapped, so that a voice held by the pedal of an instrument with
 // sostenuto_sw=off was never released.
+// Ticket 28: the pitch ratio and the gain of a volume modulation are
+// converted once per run of equal values instead of once per sample
+// (SameArgumentCache), with the same results: exp2f and powf took a good
+// part of an app's audio thread for every voice of a dense chord.
 
 #include "Voice.h"
 #include "Layer.h"
@@ -931,8 +935,9 @@ void Voice::Impl::amplitudeEnvelope(absl::Span<float> modulationSpan) noexcept
     // Volume envelope
     applyGain1<float>(db2mag(baseVolumedB_), modulationSpan);
     if (float* mod = mm.getModulation(volumeTarget_)) {
+        auto gainOfDb = cacheSameArgument([](float dB) { return db2mag(dB); });
         for (size_t i = 0; i < numSamples; ++i)
-            modulationSpan[i] *= db2mag(mod[i]);
+            modulationSpan[i] *= gainOfDb(mod[i]);
     }
 
     // Smooth the gain transitions
@@ -1134,8 +1139,9 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         pitchEnvelope(pitch);
 
         float baseRatio = pitchRatio_ * speedRatio_;
+        auto ratioOfCents = cacheSameArgument([](float cents) { return centsFactor(cents); });
         for (size_t i = 0; i < numSamples; ++i)
-            (*jumps)[i] = baseRatio * centsFactor(pitch[i]);
+            (*jumps)[i] = baseRatio * ratioOfCents(pitch[i]);
 
         // Take the first sample if the voice just started
         if (age_ == 0)

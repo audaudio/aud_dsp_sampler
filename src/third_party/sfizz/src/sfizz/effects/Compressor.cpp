@@ -6,7 +6,13 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): the
 // stereo link (comp_stlink) follows every frame of the right channel, not
-// its second frame only.
+// its second frame only. Ticket 28: a silent block passes as it is while
+// the compressor is at rest - its detectors silent, its gains at 0 dB and
+// the memory of its oversampling filters silent -, which processing it
+// would leave as it is; every SFZ file of an app limits its node with this
+// effect, idle nodes too. The oversampling filters and the detectors of
+// both channels run in one loop each, on state in registers, with the
+// operations of the original per sample: the output is the same.
 
 /*
    Note(jpc): implementation status
@@ -27,8 +33,46 @@
 #include "MathHelpers.h"
 #include "OversamplerHelpers.h"
 #include "absl/memory/memory.h"
+#include <cmath>
+#include <cstring>
 
 static constexpr int _oversampling = 2;
+
+namespace {
+
+// The process_block() of the oversampling filters of both channels in one
+// loop, on copies the compiler keeps in registers: the filters are chains
+// whose every sample waits for the last, and the two chains overlap.
+// Every sample takes the operations of process_block() (Audanika, ticket 28).
+template <class Upsampler>
+void upsampleStereo(Upsampler (&upsamplers)[sfz::EffectChannels], float* left2x, float* right2x,
+    const float* const inputs[], unsigned nframes)
+{
+    Upsampler left = upsamplers[0];
+    Upsampler right = upsamplers[1];
+    for (unsigned i = 0; i < nframes; ++i) {
+        left.process_sample(left2x[2 * i], left2x[2 * i + 1], inputs[0][i]);
+        right.process_sample(right2x[2 * i], right2x[2 * i + 1], inputs[1][i]);
+    }
+    upsamplers[0] = left;
+    upsamplers[1] = right;
+}
+
+template <class Downsampler>
+void downsampleStereo(Downsampler (&downsamplers)[sfz::EffectChannels], float* const outputs[],
+    const float* left2x, const float* right2x, unsigned nframes)
+{
+    Downsampler left = downsamplers[0];
+    Downsampler right = downsamplers[1];
+    for (unsigned i = 0; i < nframes; ++i) {
+        outputs[0][i] = left.process_sample(left2x + 2 * i);
+        outputs[1][i] = right.process_sample(right2x + 2 * i);
+    }
+    downsamplers[0] = left;
+    downsamplers[1] = right;
+}
+
+} // namespace
 
 namespace sfz {
 namespace fx {
@@ -85,16 +129,44 @@ namespace fx {
             comp.instanceClear();
     }
 
+    bool Compressor::isAtRest() const
+    {
+        const Impl& impl = *_impl;
+        if (!std::isfinite(impl._inputGain))
+            return false;
+
+        for (const faustCompressor& comp : impl._compressor) {
+            if (!comp.isAtRest())
+                return false;
+        }
+
+        for (unsigned c = 0; c < EffectChannels; ++c) {
+            if (!impl._upsampler2x[c].is_cleared() || !impl._downsampler2x[c].is_cleared())
+                return false;
+        }
+
+        return true;
+    }
+
     void Compressor::process(const float* const inputs[], float* const outputs[], unsigned nframes)
     {
         Impl& impl = *_impl;
+
+        // Silence in, at rest: the output is silent, the state stays.
+        if (isSilent(inputs, nframes) && isAtRest()) {
+            for (unsigned c = 0; c < EffectChannels; ++c) {
+                if (outputs[c] != inputs[c])
+                    std::memcpy(outputs[c], inputs[c], nframes * sizeof(float));
+            }
+            return;
+        }
+
         auto inOut2x = AudioSpan<float>(impl._tempBuffer2x).first(_oversampling * nframes);
 
         absl::Span<float> left2x = inOut2x.getSpan(0);
         absl::Span<float> right2x = inOut2x.getSpan(1);
 
-        impl._upsampler2x[0].process_block(left2x.data(), inputs[0], nframes);
-        impl._upsampler2x[1].process_block(right2x.data(), inputs[1], nframes);
+        upsampleStereo(impl._upsampler2x, left2x.data(), right2x.data(), inputs, nframes);
 
         const float inputGain = impl._inputGain;
         for (unsigned i = 0; i < _oversampling * nframes; ++i) {
@@ -106,19 +178,9 @@ namespace fx {
             absl::Span<float> leftGain2x = impl._gain2x.getSpan(0);
             absl::Span<float> rightGain2x = impl._gain2x.getSpan(1);
 
-            {
-                faustCompressor& comp = impl._compressor[0];
-                float* inputs[] = { left2x.data() };
-                float* outputs[] = { leftGain2x.data() };
-                comp.compute(_oversampling * nframes, inputs, outputs);
-            }
-
-            {
-                faustCompressor& comp = impl._compressor[1];
-                float* inputs[] = { right2x.data() };
-                float* outputs[] = { rightGain2x.data() };
-                comp.compute(_oversampling * nframes, inputs, outputs);
-            }
+            faustCompressor::computeTwo(impl._compressor[0], impl._compressor[1],
+                _oversampling * nframes, left2x.data(), right2x.data(),
+                leftGain2x.data(), rightGain2x.data());
 
             for (unsigned i = 0; i < _oversampling * nframes; ++i) {
                 left2x[i] *= leftGain2x[i];
@@ -145,8 +207,7 @@ namespace fx {
             }
         }
 
-        impl._downsampler2x[0].process_block(outputs[0], left2x.data(), nframes);
-        impl._downsampler2x[1].process_block(outputs[1], right2x.data(), nframes);
+        downsampleStereo(impl._downsampler2x, outputs, left2x.data(), right2x.data(), nframes);
     }
 
     std::unique_ptr<Effect> Compressor::makeInstance(absl::Span<const Opcode> members)

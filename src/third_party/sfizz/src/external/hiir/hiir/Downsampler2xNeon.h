@@ -23,6 +23,11 @@ http://sam.zoy.org/wtfpl/COPYING for more details.
 
 *Tab=3***********************************************************************/
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm):
+// is_cleared () tells whether the memory of the filter is silent, as after
+// clear_buffers (), so that sfizz's compressor can pass silence through
+// without running the filter, which gives silence then and stays silent.
+
 
 
 #pragma once
@@ -78,6 +83,20 @@ public:
 	void           process_block_split (float out_l_ptr [], float out_h_ptr [], const float in_ptr [], long nbr_spl);
 
 	void           clear_buffers ();
+	bool           is_cleared () const
+	{
+		for (int i = 0; i < NBR_STAGES + 1; ++i)
+		{
+			for (int j = 0; j < 4; ++j)
+			{
+				if (_filter [i]._mem [j] != 0)
+				{
+					return false;
+				}
+			}
+		}
+		return true;
+	}
 
 
 

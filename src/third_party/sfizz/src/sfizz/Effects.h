@@ -6,6 +6,9 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
 // factory keeps the effect types it did not know since the last clear.
+// Ticket 28: an effect tells whether it is at rest, and a bus whose input is
+// silent and whose effects are all at rest skips them: the sampler of an app
+// ran its compressor on every idle node in every block.
 
 #pragma once
 #include "AudioBuffer.h"
@@ -13,6 +16,8 @@
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include <array>
+#include <cstdint>
+#include <cstring>
 #include <vector>
 #include <memory>
 
@@ -53,11 +58,37 @@ public:
     virtual void process(const float* const inputs[], float* const outputs[], unsigned nframes) = 0;
 
     /**
+       @brief Whether the effect is at rest: a silent input gives a silent
+              output and leaves the effect at rest, so that a bus may skip
+              it. An effect with a tail that still rings is not at rest; an
+              effect that cannot tell says no (Audanika, ticket 28).
+     */
+    virtual bool isAtRest() const { return false; }
+
+    /**
        @brief Type of the factory function used to instantiate an effect given
               the contents of the <effect> block
      */
     typedef std::unique_ptr<Effect>(MakeInstance)(absl::Span<const Opcode> members);
 };
+
+/**
+   @brief Whether the first nframes of both effect channels are all zero, of
+          either sign (Audanika, ticket 28).
+ */
+inline bool isSilent(const float* const channels[], unsigned nframes) noexcept
+{
+    uint32_t bits = 0;
+    for (unsigned c = 0; c < EffectChannels; ++c) {
+        const float* channel = channels[c];
+        for (unsigned i = 0; i < nframes; ++i) {
+            uint32_t sample;
+            std::memcpy(&sample, &channel[i], sizeof(sample));
+            bits |= sample & 0x7fffffffu;
+        }
+    }
+    return bits == 0;
+}
 
 /**
    @brief SFZ effects factory
@@ -195,9 +226,19 @@ public:
      */
     size_t numEffects() const noexcept;
 private:
+    /**
+       @brief Whether the inputs are silent and every effect is at rest:
+              the outputs are silent then (Audanika, ticket 28).
+     */
+    bool isAtRest(unsigned nframes) const noexcept;
+
     std::vector<std::unique_ptr<Effect>> _effects;
     AudioBuffer<float> _inputs { EffectChannels, config::defaultSamplesPerBlock };
     AudioBuffer<float> _outputs { EffectChannels, config::defaultSamplesPerBlock };
+    // Whether something was added to the inputs since clearInputs, and
+    // whether the outputs hold the silence clearInputs wrote.
+    bool _inputsTouched { true };
+    bool _outputsSilent { false };
     float _gainToMain { Default::effect };
     float _gainToMix { Default::effect };
 };

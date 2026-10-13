@@ -18,6 +18,13 @@
 // the hash of its flags, its source and the headers, in parallel; a run
 // without changes only links and executes. Each build keeps only the
 // objects and the binary of its last run. The options are in `usage` below.
+//
+// --bench builds the micro-benchmark of ticket 28 instead
+// (test/native/bench/sfizz_bench.cpp) twice at -O3, like the build hook:
+// with the fork of sfizz of a release before the change and with the fork of
+// now. It prints what the hot spots of an app's audio thread cost per call
+// before and after, and compares the renders of the app's instrument of
+// both builds.
 
 'use strict';
 
@@ -32,6 +39,10 @@ const root = path.resolve(__dirname, '..');
 // The builds --only= names.
 const variants = ['asan', 'plain', 'rtsan', 'tsan'];
 
+// The release whose fork of sfizz --bench measures as before: the last one
+// before ticket 28 made the hot spots of the audio thread faster.
+const benchBaseDefault = '0.3.0';
+
 const usage = `Usage: node scripts/test-native.js [options]
 
   (no options)      every build this machine has
@@ -40,6 +51,7 @@ const usage = `Usage: node scripts/test-native.js [options]
   --no-rtsan        skip the rtsan build
   --no-tsan         skip the thread sanitizer
   --only=<build>    one build: ${variants.join(', ')}
+  --bench           the benchmark of the fork before and after ticket 28
   --help            this text
 
   AUD_TEST_FILTER=<part of a name>     run the matching tests only
@@ -49,6 +61,10 @@ const usage = `Usage: node scripts/test-native.js [options]
   AUD_LLVM_SYMBOLIZER=<llvm-symbolizer>
                                        the symbolizer of the tsan reports
                                        on macOS, beside LLVM's dsymutil
+  AUD_BENCH_BASE=<git ref>             the fork --bench compares with,
+                                       default ${benchBaseDefault}
+  UPDATE_GOLDENS=1                     --bench writes the golden of the
+                                       app's instrument with that fork
 `;
 
 // The options of the command line; anything else ends the run with the
@@ -60,6 +76,7 @@ function parseArgs(argv) {
     noRtsan: false,
     noTsan: false,
     only: '',
+    bench: false,
   };
   for (const arg of argv) {
     if (arg === '--help') {
@@ -75,6 +92,8 @@ function parseArgs(argv) {
       options.noTsan = true;
     } else if (arg.startsWith('--only=') && variants.includes(arg.slice(7))) {
       options.only = arg.slice(7);
+    } else if (arg === '--bench') {
+      options.bench = true;
     } else {
       process.stderr.write(`Unknown option ${arg}\n\n${usage}`);
       process.exit(2);
@@ -244,8 +263,9 @@ function units(context) {
   for (const file of context.graphSources) {
     result.push({ file, flags: graphFlags });
   }
+  const defines = context.defines ?? sfizzDefines;
   for (const file of context.samplerSources) {
-    result.push({ file, flags: ['-std=c++14', ...sfizzDefines] });
+    result.push({ file, flags: ['-std=c++14', ...defines] });
   }
   for (const file of context.sfizzSources) {
     // clang++ takes a .c file for C++ unless it is told the language.
@@ -257,7 +277,7 @@ function units(context) {
       file,
       flags: [
         ...(cpp ? ['-std=gnu++14'] : ['-x', 'c', '-std=gnu11']),
-        ...sfizzDefines,
+        ...defines,
         '-fno-sanitize=alignment',
         '-w',
       ],
@@ -265,7 +285,7 @@ function units(context) {
   }
   for (const file of context.testSources) {
     const fork = path.basename(file).startsWith('sfizz_');
-    const flags = [fork ? '-std=gnu++14' : '-std=c++17', ...sfizzDefines];
+    const flags = [fork ? '-std=gnu++14' : '-std=c++17', ...defines];
     if (context.pristineFilters && file.endsWith('sfizz_rbj_filters_test.cpp')) {
       // A C string literal of the path: JSON escapes quotes and backslashes
       // the way C does.
@@ -301,7 +321,7 @@ async function compileAll(name, compiler, variantFlags, context) {
   const common = [
     '-c',
     '-g',
-    '-O1',
+    context.optimization ?? '-O1',
     '-fno-omit-frame-pointer',
     ...variantFlags,
     ...context.includes.map((directory) => `-I${directory}`),
@@ -428,7 +448,196 @@ function pristineFilters() {
   return file;
 }
 
+// ............................................................................
+// The benchmark of ticket 28
+
+// The fork of sfizz at the git ref `ref`, unpacked once below .dart_tool;
+// the folders of other refs go.
+function forkAt(ref) {
+  const resolved = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  if (resolved.status !== 0) throw new Error(`git cannot resolve ${ref}`);
+  const commit = resolved.stdout.trim().slice(0, 12);
+  const bases = path.join(root, '.dart_tool', 'aud_native_test', 'bench-base');
+  const folder = path.join(bases, commit);
+  const sfizz = path.join(folder, 'src', 'third_party', 'sfizz');
+  if (!fs.existsSync(path.join(sfizz, 'SOURCES.txt'))) {
+    fs.rmSync(bases, { recursive: true, force: true });
+    fs.mkdirSync(folder, { recursive: true });
+    const tar = path.join(folder, 'fork.tar');
+    const steps = [
+      ['git', ['archive', '-o', tar, commit, 'src/third_party/sfizz'], root],
+      ['tar', ['-xf', tar, '-C', folder], folder],
+    ];
+    for (const [command, args, cwd] of steps) {
+      const result = spawnSync(command, args, { cwd, encoding: 'utf8' });
+      if (result.status !== 0) {
+        fs.rmSync(folder, { recursive: true, force: true });
+        throw new Error(`${command} ${args.join(' ')} failed: ${result.stderr}`);
+      }
+    }
+    fs.rmSync(tar);
+  }
+  return sfizz;
+}
+
+// The units of the benchmark on the fork in `sfizz`, built like the hook
+// builds them: -O3, NDEBUG, without sfizz's release asserts.
+function benchContext(sfizz) {
+  const testNative = path.join(root, 'test', 'native');
+  const headers = headersBelow([
+    path.join(sfizz, 'src'),
+    path.join(sfizz, 'external'),
+    testNative,
+  ]);
+  const headersHash = createHash('sha256');
+  for (const header of headers) {
+    headersHash.update(header);
+    headersHash.update(fs.readFileSync(header));
+  }
+  return {
+    includes: [testNative],
+    systemIncludes: lines(path.join(sfizz, 'INCLUDES.txt')).map((d) =>
+      path.join(sfizz, d),
+    ),
+    headersHash: headersHash.digest('hex'),
+    graphSources: [],
+    samplerSources: [],
+    sfizzSources: lines(path.join(sfizz, 'SOURCES.txt')).map((file) =>
+      path.join(sfizz, file),
+    ),
+    testSources: [path.join(testNative, 'bench', 'sfizz_bench.cpp')],
+    pristineFilters: null,
+    rtsan: false,
+    defines: sfizzDefines.filter((d) => d !== '-DSFIZZ_ENABLE_RELEASE_ASSERT'),
+    optimization: '-O3',
+  };
+}
+
+// Runs a benchmark binary; returns its measurements by name. The renders
+// land in `folder`.
+function runBench(name, binary, folder) {
+  fs.rmSync(folder, { recursive: true, force: true });
+  fs.mkdirSync(folder, { recursive: true });
+  process.stdout.write(`${name}: ${path.basename(binary)}\n`);
+  const result = spawnSync(binary, [folder], {
+    encoding: 'utf8',
+    cwd: root,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    process.stderr.write(result.stdout + result.stderr);
+    process.exit(result.status ?? 1);
+  }
+  const rows = new Map();
+  for (const line of result.stdout.split('\n')) {
+    if (!line.startsWith('AUD_BENCH ')) continue;
+    const row = JSON.parse(line.slice('AUD_BENCH '.length));
+    rows.set(row.name, row.ns);
+  }
+  return rows;
+}
+
+// The samples of a WAV file of 32-bit floats.
+function wavSamples(file) {
+  const bytes = fs.readFileSync(file);
+  for (let at = 12; at + 8 <= bytes.length; ) {
+    const size = bytes.readUInt32LE(at + 4);
+    if (bytes.toString('latin1', at, at + 4) === 'data') {
+      const samples = new Float32Array(size / 4);
+      for (let i = 0; i < samples.length; i++) {
+        samples[i] = bytes.readFloatLE(at + 8 + 4 * i);
+      }
+      return samples;
+    }
+    at += 8 + size + (size & 1);
+  }
+  throw new Error(`${file} has no data`);
+}
+
+// How two renders differ: the samples whose bits differ, the largest
+// difference.
+function renderDifference(a, b) {
+  if (a.length !== b.length) return { bits: Infinity, largest: Infinity };
+  const bitsA = new Uint32Array(a.buffer);
+  const bitsB = new Uint32Array(b.buffer);
+  let bits = 0;
+  let largest = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (bitsA[i] !== bitsB[i]) bits++;
+    largest = Math.max(largest, Math.abs(a[i] - b[i]));
+  }
+  return { bits, largest };
+}
+
+function formatNs(ns) {
+  if (ns >= 1e6) return `${(ns / 1e6).toFixed(2)} ms`;
+  if (ns >= 1e3) return `${(ns / 1e3).toFixed(2)} µs`;
+  return `${ns.toFixed(1)} ns`;
+}
+
+// Builds and runs the benchmark before and after, prints the table and
+// compares the renders; fails when they differ by more than 1e-6.
+async function bench() {
+  const compiler = 'clang++';
+  if (!works(compiler, [])) throw new Error('clang++ is missing');
+  const base = process.env.AUD_BENCH_BASE || benchBaseDefault;
+  const builds = [
+    ['bench-before', forkAt(base)],
+    ['bench-after', path.join(root, 'src', 'third_party', 'sfizz')],
+  ];
+  const results = [];
+  for (const [name, sfizz] of builds) {
+    const binary = await build(name, compiler, [], benchContext(sfizz));
+    const folder = path.join(outDirOf(name), 'renders');
+    results.push({ name, folder, rows: runBench(name, binary, folder) });
+  }
+  const [before, after] = results;
+  const names = [...before.rows.keys()];
+  const width = Math.max(...names.map((n) => n.length));
+  const header = `${'per call'.padEnd(width)} | ${'before'.padStart(10)} | ${'after'.padStart(10)} | speedup`;
+  process.stdout.write(`\nThe fork of ${base} (before) and of now (after), -O3:\n\n`);
+  process.stdout.write(`${header}\n${'-'.repeat(header.length)}\n`);
+  for (const name of names) {
+    const a = before.rows.get(name);
+    const b = after.rows.get(name);
+    const speedup = a / b;
+    process.stdout.write(
+      `${name.padEnd(width)} | ${formatNs(a).padStart(10)} | ${formatNs(b).padStart(10)} | ` +
+        `${speedup >= 10 ? speedup.toFixed(0) : speedup.toFixed(1)}x\n`,
+    );
+  }
+  process.stdout.write('\n');
+  let failed = false;
+  for (const render of ['render-golden.wav', 'render-bend.wav']) {
+    const difference = renderDifference(
+      wavSamples(path.join(before.folder, render)),
+      wavSamples(path.join(after.folder, render)),
+    );
+    process.stdout.write(
+      `${render}: ${difference.bits} samples differ in their bits, ` +
+        `by at most ${difference.largest}\n`,
+    );
+    if (!(difference.largest <= 1e-6)) failed = true;
+  }
+  if (process.env.UPDATE_GOLDENS === '1') {
+    const golden = path.join(root, 'test', 'goldens', 'sfizz_app_instrument.wav');
+    fs.copyFileSync(path.join(before.folder, 'render-golden.wav'), golden);
+    process.stdout.write(`wrote ${path.relative(root, golden)} with the fork of ${base}\n`);
+  }
+  if (failed) {
+    process.stderr.write('bench: the renders differ by more than 1e-6\n');
+    process.exit(1);
+  }
+}
+
 async function main() {
+  if (options.bench) {
+    await bench();
+    return;
+  }
   const coreSrc = path.join(packageRoot('aud_audio_core'), 'src');
   const graphSrc = path.join(packageRoot('aud_audio_graph'), 'src');
   const sfizz = path.join(root, 'src', 'third_party', 'sfizz');

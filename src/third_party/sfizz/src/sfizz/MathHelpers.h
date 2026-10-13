@@ -7,7 +7,8 @@
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): i0()
 // is a power series of its own instead of the function of cephes, whose
 // license was a permission e-mail, and gives every platform the same values;
-// the state of fast_rand is atomic.
+// the state of fast_rand is atomic. Ticket 28: SameArgumentCache calls a
+// per-sample conversion once per run of equal arguments.
 
 /**
  * @file MathHelpers.h
@@ -27,6 +28,8 @@
 #include <atomic>
 #include <cmath>
 #include <cfenv>
+#include <cstdint>
+#include <cstring>
 #include <simde/simde-features.h>
 #if SIMDE_NATURAL_VECTOR_SIZE_GE(128)
 #include <simde/x86/sse.h>
@@ -137,6 +140,48 @@ template <class Type>
 constexpr Type mag2db(Type in)
 {
     return static_cast<Type>(20.0) * std::log10(in);
+}
+
+/**
+ * @brief Calls a function of a float once per run of arguments with the same
+ * bits and gives its result for the whole run (Audanika, ticket 28). A
+ * conversion per sample, such as centsFactor or db2mag of a modulation that
+ * holds its value, then costs one call per block instead of one per sample,
+ * with the very results of the calls it saves.
+ *
+ * @tparam F a function of a float that returns a float, without side effects
+ */
+template <class F>
+class SameArgumentCache {
+public:
+    explicit SameArgumentCache(F function)
+        : function_(function)
+    {
+    }
+
+    float operator()(float argument) noexcept
+    {
+        uint32_t bits;
+        std::memcpy(&bits, &argument, sizeof(bits));
+        if (!valid_ || bits != bits_) {
+            bits_ = bits;
+            value_ = function_(argument);
+            valid_ = true;
+        }
+        return value_;
+    }
+
+private:
+    F function_;
+    uint32_t bits_ { 0 };
+    float value_ { 0.0f };
+    bool valid_ { false };
+};
+
+template <class F>
+SameArgumentCache<F> cacheSameArgument(F function)
+{
+    return SameArgumentCache<F>(function);
 }
 
 /**
