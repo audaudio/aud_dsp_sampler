@@ -10,7 +10,7 @@
 - The Android plugin hands the AssetManager to the native library when the app starts
 - The store keys samples by their lexically normal path, so instruments share them
 - Native tests with a directory as the assets, the example loads from its APK on the emulator
-- README: load instruments from Android assets; index.jsonc names audanika_app
+- README: load instruments from Android assets
 - Abseil's int128.cc and int128_no_intrinsic.inc of release 20240116.0: the library builds for armeabi-v7a
 - On Android the library links with --no-undefined, so a missing symbol fails the build
 - An instrument without regions loads and plays nothing, e.g. a text with only a comment

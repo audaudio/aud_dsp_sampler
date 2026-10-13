@@ -68,7 +68,7 @@ constexpr int kEventBlock = 40;
 constexpr int kEventOffset = 100;
 constexpr long kEventFrame = static_cast<long>(kEventBlock) * kBlock + kEventOffset;
 
-// The amplitude envelopes of the instruments of audanika_app: the ADSR, and
+// Amplitude envelopes of instruments with linear stages: the ADSR, and
 // the flex EG that replaces it, with the same attack and release.
 std::string adsrOf(double release) {
   return "ampeg_attack=0.003 ampeg_release=" + std::to_string(release) + " ampeg_sustain=100";
@@ -150,7 +150,7 @@ long framesToEnd(const Played& played) {
 AUD_TEST(sfizz_voice_releases_on_the_pedal_going_up_like_on_a_note_off) {
   // A voice held by the pedal begins its release on the frame of the pedal
   // going up and ends like one a note-off releases there, with the ADSR and
-  // with the flex EG of audanika_app.
+  // with a flex EG for the amplitude.
   for (const std::string& opcodes : {adsrOf(0.2), flexOf(0.2)}) {
     const Played noteOff = release(opcodes, false);
     const Played pedal = release(opcodes, true);

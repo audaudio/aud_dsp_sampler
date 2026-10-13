@@ -125,7 +125,7 @@ AUD_TEST(sfizz_effects_process_blocks_shorter_than_the_block_size) {
 }
 
 AUD_TEST(sfizz_effects_comp_and_gain_sound_the_same_in_any_blocks) {
-  // The output stage of the instruments of audanika_app: a limiting
+  // An output stage of instruments that limit their node: a limiting
   // compressor, then a gain that undoes sfizz's volume of -7.35 dB.
   const std::string chain =
       "<effect> bus=main type=comp comp_attack=0 comp_release=0.05 comp_ratio=50 "

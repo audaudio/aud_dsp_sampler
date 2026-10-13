@@ -20,8 +20,7 @@
       "aud_midi_standard": "dev dependency: MIDI messages of the golden and instrument tests"
     },
     "usedBy": {
-      "aud_audio": "the example app plays the sampler on its sampler page",
-      "audanika_app": "plays the sounds of the Audanika app, one node per MIDI channel"
+      "aud_audio": "the example app plays the sampler on its sampler page"
     }
   }
 }

@@ -1232,7 +1232,7 @@ AUD_TEST(reports_the_release_of_a_flex_eg_as_its_tail) {
 }
 
 AUD_TEST(renders_the_effects_in_blocks_shorter_than_the_largest) {
-  // The output stage of audanika_app's instruments, a limiting compressor
+  // An output stage of instruments that limit their node, a limiting compressor
   // and a gain that undoes sfizz's volume of -7.35 dB, in blocks shorter
   // than the largest of the graph (ticket 27): no check of sfizz fails and
   // writes to stderr on the audio thread - the rtsan build would catch the
