@@ -5,12 +5,16 @@
 // found in the LICENSE file in the root of this package.
 
 // Tests the synth of the sfizz fork (src/sfizz/Synth.cpp) without the node:
-// what a load keeps of the errors of its parser, and how it drops the
-// regions whose samples it cannot read.
+// what a load keeps of the errors of its parser, how it drops the regions
+// whose samples it cannot read, and that an instrument without regions
+// loads (ticket 27).
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
+#include "AudioSpan.h"
 #include "Config.h"
 #include "Region.h"
 #include "RegionSet.h"
@@ -31,6 +35,38 @@ AUD_TEST(sfizz_synth_keeps_the_first_errors_of_its_parser) {
   const std::vector<std::string>& errors = synth.getParseErrors();
   AUD_CHECK(errors.size() == sfz::config::maxParseErrors);
   AUD_CHECK(!errors.empty() && errors.front().find("garbage.sfz at line 1: ") == 0);
+}
+
+// ############################################################################
+// Instruments without regions
+
+AUD_TEST(sfizz_synth_loads_an_instrument_without_regions) {
+  // A comment, nothing at all, headers without a region: each loads, like
+  // the empty text, and plays nothing.
+  for (const char* text : {"// silent", "", "<control> set_cc64=127\n<global> volume=-6\n",
+                           "<effect> type=gain gain=6\n"}) {
+    sfz::Synth synth;
+    synth.setSamplesPerBlock(256);
+    AUD_CHECK(synth.loadSfzString("/aud_dsp_sampler/silent.sfz", text));
+    AUD_CHECK(synth.getNumRegions() == 0);
+    AUD_CHECK(synth.getParseErrors().empty());
+    synth.noteOn(0, 60, 100);
+    AUD_CHECK(synth.getNumActiveVoices() == 0);
+    std::vector<float> left(256, 1.0f);
+    std::vector<float> right(256, 1.0f);
+    float* channels[2] = {left.data(), right.data()};
+    synth.renderBlock(sfz::AudioSpan<float>(channels, 2, 0, 256));
+    float peak = 0;
+    for (float sample : left) peak = std::max(peak, std::fabs(sample));
+    AUD_CHECK(peak == 0.0f);
+  }
+  // A file that does not exist fails: its parser reports that it cannot
+  // read it.
+  sfz::Synth synth;
+  AUD_CHECK(!synth.loadSfzFile("/aud_dsp_sampler/does-not-exist.sfz"));
+  AUD_CHECK(!synth.getParseErrors().empty());
+  // So does an include that does not exist, without a region beside it.
+  AUD_CHECK(!synth.loadSfzString("/aud_dsp_sampler/include.sfz", "#include \"gone.sfz\"\n"));
 }
 
 // ############################################################################

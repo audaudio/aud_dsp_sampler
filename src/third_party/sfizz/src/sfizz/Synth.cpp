@@ -13,8 +13,14 @@
 // waited for them and the timer of their garbage collection. A sample whose
 // head or whole file does not load counts as missing too; the regions a
 // load drops start no voice and leave no pointer behind.
+// Ticket 27: a virtual path such as "apk:/piano.sfz" (VirtualFile.h) is
+// loaded as it is, without a canonical form on the filesystem. An instrument
+// without regions loads and plays nothing, e.g. a text with only a comment,
+// as an empty text does; a load without regions fails only when the file
+// cannot be read or the parser reports an error.
 
 #include "SynthPrivate.h"
+#include "VirtualFile.h"
 #include "Config.h"
 #include "utility/Debug.h"
 #include "utility/Macros.h"
@@ -650,8 +656,11 @@ bool Synth::loadSfzFile(const fs::path& file)
     Impl& impl = *impl_;
     impl.prepareSfzLoad(file);
 
+    // A virtual path, e.g. "apk:/piano.sfz", has no canonical form on the
+    // filesystem (aud_dsp_sampler, ticket 27).
     std::error_code ec;
-    fs::path realFile = fs::canonical(file, ec);
+    const bool virtualFile = VirtualFiles::isVirtual(file.string());
+    fs::path realFile = virtualFile ? file : fs::canonical(file, ec);
     bool success = true;
     Parser& parser = impl.parser_;
     parser.parseFile(ec ? file : realFile);
@@ -660,7 +669,9 @@ bool Synth::loadSfzFile(const fs::path& file)
     if (!loaderParsesPermissively)
         success = parser.getErrorCount() == 0;
 
-    success = success && !impl.layers_.empty();
+    // An instrument without regions loads, unless the parser reported an
+    // error, e.g. a file it cannot read (aud_dsp_sampler, ticket 27).
+    success = success && (!impl.layers_.empty() || parser.getErrorCount() == 0);
 
     if (!success) {
         DBG("[sfizz] Loading failed");
@@ -687,7 +698,9 @@ bool Synth::loadSfzString(const fs::path& path, absl::string_view text)
     if (!loaderParsesPermissively)
         success = parser.getErrorCount() == 0;
 
-    success = success && !impl.layers_.empty();
+    // An instrument without regions loads, unless the parser reported an
+    // error, e.g. a file it cannot read (aud_dsp_sampler, ticket 27).
+    success = success && (!impl.layers_.empty() || parser.getErrorCount() == 0);
 
     if (!success) {
         auto& filePool = impl.resources_.getFilePool();

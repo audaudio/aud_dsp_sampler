@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm):
+// setReleaseTime() lets a voice that is turned off, e.g. stolen, fade
+// quickly instead of over the stages after its sustain point.
+
 #pragma once
 #include <absl/types/span.h>
 #include <memory>
@@ -52,6 +56,14 @@ public:
        Cancel the release
      */
     void cancelRelease(unsigned delay);
+
+    /**
+       Replace the release by a linear fade from the level at the release
+       to zero over `timeInSeconds`, also when the EG is releasing already:
+       a voice that is turned off fades like this. The release can no longer
+       be cancelled then. (aud_dsp_sampler, ticket 27)
+     */
+    void setReleaseTime(float timeInSeconds);
 
     /**
        Get the remaining delay samples

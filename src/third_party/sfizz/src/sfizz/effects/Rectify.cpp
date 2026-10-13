@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
+// block fills only the amounts of its own frames.
+
 /**
    Note(jpc): this effect is book-only, mentioned but not documented
 
@@ -53,7 +56,7 @@ namespace fx {
         //           half-wave rectification is achieved simply by halving it.
         const float baseAmount = _amount * (_full ? 1.0f : 0.5f);
 
-        absl::Span<float> amounts = _tempBuffer.getSpan(0);
+        absl::Span<float> amounts = _tempBuffer.getSpan(0).first(nframes);
         std::fill(amounts.begin(), amounts.end(), baseAmount);
 
         for (unsigned c = 0; c < EffectChannels; ++c) {

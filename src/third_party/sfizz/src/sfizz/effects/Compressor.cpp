@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): the
+// stereo link (comp_stlink) follows every frame of the right channel, not
+// its second frame only.
+
 /*
    Note(jpc): implementation status
 
@@ -124,7 +128,7 @@ namespace fx {
         else {
             absl::Span<float> compIn2x = impl._gain2x.getSpan(0);
             for (unsigned i = 0; i < _oversampling * nframes; ++i)
-                compIn2x[i] = std::abs(left2x[i]) + std::abs(right2x[1]);
+                compIn2x[i] = std::abs(left2x[i]) + std::abs(right2x[i]);
 
             absl::Span<float> gain2x = impl._gain2x.getSpan(1);
 

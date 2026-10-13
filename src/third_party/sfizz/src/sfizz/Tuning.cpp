@@ -4,8 +4,13 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
+// Scala file at a virtual path, e.g. "apk:/tuning.scl" for an asset of an
+// Android APK, is read from its backend (VirtualFile.h).
+
 #include "Tuning.h"
 #include "Tunings.h" // Surge tuning library
+#include "VirtualFile.h"
 #include "utility/Debug.h"
 #include <absl/types/optional.h>
 #include <algorithm>
@@ -159,35 +164,48 @@ Tuning::~Tuning()
 {
 }
 
-bool Tuning::loadScalaFile(const fs::path& path)
+// Reads the scale of a Scala file, from the filesystem or from the backend
+// of a virtual path; false when it cannot be read or parsed.
+static bool readScalaFile(const fs::path& path, Tunings::Scale& scl)
 {
-    Tunings::Scale scl;
-    fs::ifstream stream(path);
-
-    if (stream.bad()) {
-        DBG("Cannot open scale file: " << path);
-        goto failure;
-    }
-
     try {
+        if (VirtualFiles::isVirtual(path.string())) {
+            std::unique_ptr<VirtualFileData> data = VirtualFiles::open(path.string());
+            if (!data) {
+                DBG("Cannot open scale file: " << path);
+                return false;
+            }
+            std::istringstream stream(
+                std::string(static_cast<const char*>(data->data()), data->size()));
+            scl = Tunings::readSCLStream(stream);
+            return true;
+        }
+
+        fs::ifstream stream(path);
+        if (stream.bad()) {
+            DBG("Cannot open scale file: " << path);
+            return false;
+        }
         scl = Tunings::readSCLStream(stream);
+        return true;
     }
     catch (Tunings::TuningError& error) {
         DBG("Tuning: " << error.what());
-        goto failure;
+        return false;
     }
+}
 
-    if (scl.count <= 0) {
-        DBG("The scale file is empty: " << path);
-        goto failure;
+bool Tuning::loadScalaFile(const fs::path& path)
+{
+    Tunings::Scale scl;
+    if (!readScalaFile(path, scl) || scl.count <= 0) {
+        DBG("The scale file is empty or unreadable: " << path);
+        loadEqualTemperamentScale();
+        return false;
     }
 
     impl_->updateScale(scl, path);
     return true;
-
-failure:
-    loadEqualTemperamentScale();
-    return false;
 }
 
 bool Tuning::loadScalaString(const std::string& text)

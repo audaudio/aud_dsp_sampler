@@ -163,7 +163,54 @@ void main() {
 
 Die Beispiel-App von `aud_audio` spielt den Sampler auf ihrer
 Sampler-Seite; `example/` dieses Pakets zeigt die IDs des Knotens und ein
-Preset und beweist den Link-Hook.
+Preset und beweist den Link-Hook. Sein Integrationstest lädt ein
+Instrument aus den Assets seiner APK auf einem Android-Gerät:
+
+```bash
+cd example && flutter test integration_test/apk_assets_test.dart -d <device>
+```
+
+## Instrumente aus Android-Assets laden
+
+Auf Android liest der Sampler SFZ-Dateien und ihre Samples direkt aus den
+Assets der APK, ohne sie herauszukopieren, so wie es die alte Audio-Engine
+von Audanika tat. Ein Pfad, der mit `apk:/` beginnt, nennt ein Asset:
+
+```dart
+graph.setString(
+  piano,
+  AudSfzSampler.sfzFile,
+  'apk:/content/sfz/presets/piano/main.sfz', // assets/content/sfz/... in der APK
+);
+```
+
+- Der Pfad nach `apk:/` ist der Pfad innerhalb der Assets der APK:
+  `apk:/content/sfz/x.sfz` für `android/app/src/main/assets/content/sfz/x.sfz`,
+  `apk:/flutter_assets/assets/sfz/x.sfz` für das Flutter-Asset
+  `assets/sfz/x.sfz`. Die relativen Pfade in der SFZ-Datei - `sample=`,
+  `#include`, `default_path`, auch mit `..` - lösen sich ebenfalls in der
+  APK auf, genauso eine `scala_file` oder der `sfz_virtual_path` eines
+  SFZ-Texts.
+- Samples werden über `AAssetManager` gelesen: Ein unkomprimiertes Asset
+  wird ohne Kopie aus der APK eingeblendet, ein komprimiertes wird während
+  des Lesens in den Speicher entpackt. Samples bleiben unkomprimiert;
+  Android komprimiert `.wav`, `.ogg` und `.mp3` standardmäßig nicht, für
+  `.flac` gehört es in `noCompress`. Ladevorgänge und die Streams der
+  Noten laufen wie bei Dateien auf den Workern der Engine.
+- Fehlt der genaue Name eines Samples, wird der Dateiname ohne Rücksicht
+  auf Groß- und Kleinschreibung gesucht; die Ordner des Pfads müssen genau
+  passen, denn eine APK listet die Dateien eines Ordners, nicht seine
+  Unterordner. Eine Listendatei ist nicht nötig.
+- Das Paket besorgt sich den `AssetManager` selbst: Sein Android-Plugin
+  übergibt den der App an die native Bibliothek, wenn der Prozess startet,
+  bevor Dart-Code läuft. Eine App mit eigenem JNI kann stattdessen
+  `aud_dsp_sampler_set_android_assets` aufrufen. Auf iOS und den anderen
+  Plattformen endet ein Ladevorgang eines `apk:/`-Pfads mit
+  `AUD_ERROR_UNSUPPORTED` und einer Meldung, die das sagt; normale Pfade
+  funktionieren überall.
+- Der Speicher schlüsselt ein Sample nach seinem lexikalisch normalen Pfad,
+  sodass Presets in verschiedenen Ordnern, die ein Sample über verschiedene
+  relative Pfade erreichen, es teilen.
 
 ## Funktionsweise
 
@@ -185,7 +232,8 @@ Preset und beweist den Link-Hook.
   Stufe. Eine Änderung der Polyphonie oder der Stimmung lädt das
   Instrument neu, und die klingenden Noten blenden aus.
 - Der Tail des Knotens ist das längste Amplituden-Release seines
-  Instruments. Der Transport erreicht sfizz - Tempo, Taktart, Position und
+  Instruments, der ADSR oder des Flex-EG, der sie ersetzt (`egN_ampeg`).
+  Der Transport erreicht sfizz - Tempo, Taktart, Position und
   Wiedergabezustand - für seine tempo-synchrone Modulation. Ein
   Offline-Render lässt sfizz in seiner besten Qualität rechnen.
 
@@ -193,7 +241,8 @@ Preset und beweist den Link-Hook.
 
 - `sfz_file` und `sfz_text` starten einen Ladevorgang auf einem
   Worker-Thread der Engine und geben sofort seine ID zurück; eine leere
-  Datei oder ein leerer Text entlädt das Instrument. `sfz_virtual_path`
+  Datei oder ein leerer Text entlädt das Instrument, ebenso eines ohne
+  Regionen, z. B. ein Text mit nur einem Kommentar. `sfz_virtual_path`
   nennt den Pfad, gegen den die Samples des nächsten Texts aufgelöst
   werden; `scala_file` und `scala_text` laden eine Stimmung mit dem
   Instrument.
@@ -205,8 +254,9 @@ Preset und beweist den Link-Hook.
   ein Controller auslöst.
 - Ein neuerer Ladevorgang bricht einen laufenden ab; ein fehlgeschlagener
   behält das spielende Instrument. Ein Ladevorgang schlägt fehl, wenn sfizz
-  das Instrument nicht parsen kann (die Nachricht zitiert den ersten
-  Fehler), wenn es keines seiner Samples lesen kann, oder mit
+  das Instrument nicht lesen kann oder darin Fehler und keine Region
+  findet (die Nachricht zitiert den ersten Fehler), wenn es keines seiner
+  Samples lesen kann, oder mit
   `AUD_ERROR_CAPACITY`, wenn schon die Köpfe seiner Samples das
   Sample-Cache-Budget überschreiten. Ein erfolgreicher Ladevorgang nennt
   die Samples, die er nicht lesen konnte, und die Effekttypen, die sfizz
@@ -241,6 +291,11 @@ Preset und beweist den Link-Hook.
   abspielen - absolute Pfade und `../` funktionieren, so teilen
   SFZ-Bibliotheken ihre Samples. Die Sandbox der App begrenzt, was sie
   erreicht.
+- Neben dem Dateisystem liest der Fork Dateien, die ein Backend bereitstellt,
+  benannt durch ein Schema: `VirtualFile.h` hält die Backends, Parser,
+  Speicher, Audio-Reader und die Scala-Stimmung fragen es zuerst. `apk:/`
+  ist das Backend der Assets einer Android-App (`src/aud_apk_assets.cpp`);
+  die nativen Tests stellen einen Ordner des Hosts als Assets bereit.
 
 ### Nachrichten
 
@@ -270,6 +325,11 @@ Preset und beweist den Link-Hook.
   RBJ-Filter sind Audanikas eigener Code nach dem Audio EQ Cookbook, der
   verbleibende von Faust erzeugte Code trägt den STK-4.3-Hinweis, und
   fverb, das Metronom und cephes sind entfernt.
+- Die Bibliothek baut für jedes ABI von Android, auch für das 32-Bit-ABI
+  `armeabi-v7a`, auf dem Abseils 128-Bit-Ganzzahl keinen Compilertyp hat
+  und `int128.cc` braucht. Auf Android linkt sie mit `--no-undefined`: Ein
+  Symbol, das der Auszug nicht enthält, bricht den Build ab statt das
+  Laden in der App.
 
 ### Die Dart-API
 
@@ -281,6 +341,10 @@ Preset und beweist den Link-Hook.
   registriert bei der Host-API eines Graphen und wirft eine
   `AudDspSamplerException` mit dem Ergebniscode, wenn die Engine ablehnt,
   `storeBytes` und `storeFiles` lesen den Speicher des Prozesses.
+- Das Paket ist ein Android-Plugin ohne Flutter-Abhängigkeit: Flutter baut
+  den Java-Shim in `android/`, einen Content-Provider, der den
+  `AssetManager` der App an die native Bibliothek übergibt, wenn der
+  Prozess startet.
 - Jedes Member von `AudDspSampler` ist mit `@RecordUse` aufgezeichnet: In
   einem Profile- oder Release-Build behält der Link-Hook die native
   Bibliothek nur, wenn die App eines davon nutzt.

@@ -4,8 +4,14 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
+// virtual path, e.g. "apk:/piano/a.wav" for an asset of an Android APK, is
+// read from the bytes its backend serves (VirtualFile.h), as a memory file
+// whose bytes the reader keeps alive.
+
 #include "AudioReader.h"
 #include "FileMetadata.h"
+#include "VirtualFile.h"
 #include <absl/memory/memory.h>
 #include <st_audiofile.hpp>
 #if defined(SFIZZ_USE_SNDFILE)
@@ -387,8 +393,43 @@ static AudioReaderPtr createAudioReaderWithHandle(ST_AudioFile handle, std::uniq
     return reader;
 }
 
+/**
+ * @brief Reader of a virtual file: a memory reader over the bytes of the
+ * file, which it keeps alive (aud_dsp_sampler, ticket 27).
+ */
+class VirtualFileAudioReader : public AudioReader {
+public:
+    VirtualFileAudioReader(AudioReaderPtr reader, std::unique_ptr<VirtualFileData> data)
+        : reader_(std::move(reader)), data_(std::move(data)) {}
+    AudioReaderType type() const override { return reader_->type(); }
+    int format() const override { return reader_->format(); }
+    int64_t frames() const override { return reader_->frames(); }
+    unsigned channels() const override { return reader_->channels(); }
+    unsigned sampleRate() const override { return reader_->sampleRate(); }
+    size_t readNextBlock(float* buffer, size_t frames) override { return reader_->readNextBlock(buffer, frames); }
+    bool getInstrumentInfo(InstrumentInfo& info) override { return reader_->getInstrumentInfo(info); }
+    bool getWavetableInfo(WavetableInfo& info) override { return reader_->getWavetableInfo(info); }
+private:
+    AudioReaderPtr reader_;
+    std::unique_ptr<VirtualFileData> data_;
+};
+
+static AudioReaderPtr createVirtualFileReader(const fs::path& path, bool reverse, std::error_code* ec)
+{
+    std::unique_ptr<VirtualFileData> data = VirtualFiles::open(path.string());
+    if (!data) {
+        ST_AudioFile none;
+        return createAudioReaderWithHandle(std::move(none), nullptr, reverse, ec);
+    }
+    AudioReaderPtr reader = createAudioReaderFromMemory(data->data(), data->size(), reverse, ec);
+    return AudioReaderPtr(new VirtualFileAudioReader(std::move(reader), std::move(data)));
+}
+
 AudioReaderPtr createAudioReader(const fs::path& path, bool reverse, std::error_code* ec)
 {
+    if (VirtualFiles::isVirtual(path.string()))
+        return createVirtualFileReader(path, reverse, ec);
+
     ST_AudioFile handle;
 #if defined(_WIN32)
     handle.open_file_w(path.wstring().c_str());

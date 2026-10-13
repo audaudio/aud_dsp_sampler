@@ -29,9 +29,16 @@
 // whose header claims more frames than sfizz counts, or than memory holds,
 // is refused or left to its head instead of ending the process, and a pool
 // without a host reads whole files at once.
+// Ticket 27: virtual paths, e.g. "apk:/piano/a.wav" for an asset of an
+// Android APK, are checked and read through their backend (VirtualFile.h),
+// with the file name matched without regard to case when the exact name is
+// not there. The store keys a file by its lexically normal path, so that
+// instruments in different folders that reach one sample through different
+// relative paths share it.
 
 #include "FilePool.h"
 #include "AudioReader.h"
+#include "VirtualFile.h"
 #include "Buffer.h"
 #include "AudioBuffer.h"
 #include "AudioSpan.h"
@@ -196,20 +203,37 @@ absl::optional<sfz::FileInformation> getReaderInformation(sfz::AudioReader* read
     return returnedValue;
 }
 
-// The key of a file in the store: its path and its direction, with its size
-// and time of change, so that a file changed on disk is read again.
+// The key of a file in the store: its lexically normal path and its
+// direction, with its size and time of change, so that a file changed on
+// disk is read again. A virtual file has no time of change: its backend, e.g.
+// an APK, does not change while the process runs.
 // The count of a file time may be a 128-bit integer (Android's libc++),
 // which std::to_string does not take.
 std::string keyOf(const fs::path& file, bool reverse)
 {
+    const std::string direction = reverse ? "|r|" : "|f|";
+    if (sfz::VirtualFiles::isVirtual(file.string())) {
+        const int64_t size = sfz::VirtualFiles::sizeOf(file.string());
+        return sfz::VirtualFiles::normalized(file.string()) + direction +
+            std::to_string(static_cast<long long>(size < 0 ? 0 : size)) + "|0";
+    }
     std::error_code sizeError;
     std::error_code timeError;
     const auto size = fs::file_size(file, sizeError);
     const auto time = fs::last_write_time(file, timeError);
     const unsigned long long bytes = sizeError ? 0 : static_cast<unsigned long long>(size);
     const long long ticks = timeError ? 0 : static_cast<long long>(time.time_since_epoch().count());
-    return file.string() + (reverse ? "|r|" : "|f|") + std::to_string(bytes) + "|" +
+    return file.lexically_normal().string() + direction + std::to_string(bytes) + "|" +
         std::to_string(ticks);
+}
+
+// Whether the file is there, on the filesystem or in its backend.
+bool fileExists(const fs::path& file)
+{
+    if (sfz::VirtualFiles::isVirtual(file.string()))
+        return sfz::VirtualFiles::exists(file.string());
+    std::error_code ec;
+    return fs::exists(file, ec);
 }
 
 size_t bufferBytes(const sfz::FileAudioBuffer& buffer) noexcept
@@ -256,7 +280,7 @@ absl::optional<FileInformation> SampleStore::information(const fs::path& file, b
             return it->second;
     }
     std::error_code ec;
-    if (!fs::exists(file, ec))
+    if (!fileExists(file))
         return {};
     AudioReaderPtr reader = createAudioReader(file, reverse, &ec);
     if (ec || !reader)
@@ -289,7 +313,7 @@ std::shared_ptr<FileData> SampleStore::acquire(const fs::path& file, bool revers
     // Read outside the lock: other loads go on meanwhile. Two loads that miss
     // together read the file twice; the second shares the first's result.
     std::error_code ec;
-    if (!fs::exists(file, ec))
+    if (!fileExists(file))
         return nullptr;
     AudioReaderPtr reader = createAudioReader(file, reverse, &ec);
     if (ec || !reader)
@@ -480,6 +504,8 @@ bool FilePool::reportProgress(float progress)
 bool FilePool::checkSample(std::string& filename) const noexcept
 {
     fs::path path { rootDirectory / filename };
+    if (VirtualFiles::isVirtual(path.string()))
+        return VirtualFiles::checkFile(rootDirectory.string(), filename);
     std::error_code ec;
     if (fs::exists(path, ec))
         return true;

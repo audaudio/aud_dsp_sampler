@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.0 - 2026-10-13
+
+### Added
+
+- Add apk:/ paths that read the assets of an Android app
+- A file layer under sfizz: VirtualFile.h serves paths with a scheme from a backend
+- apk:/ paths read SFZ files, includes, samples and Scala files from the APK through AAssetManager, without a copy
+- The Android plugin hands the AssetManager to the native library when the app starts
+- The store keys samples by their lexically normal path, so instruments share them
+- Native tests with a directory as the assets, the example loads from its APK on the emulator
+- README: load instruments from Android assets
+- Abseil's int128.cc and int128_no_intrinsic.inc of release 20240116.0: the library builds for armeabi-v7a
+- On Android the library links with --no-undefined, so a missing symbol fails the build
+- An instrument without regions loads and plays nothing, e.g. a text with only a comment
+- The gain effect takes blocks shorter than the block size; comp and gate link the channels on every frame
+- A stolen voice with a flex EG for the amplitude fades over off_time instead of its whole release
+- sustain_sw and sostenuto_sw each switch their own pedal; they were swapped
+- The tail of the node counts the release of a flex EG that replaces the ADSR
+- An empty APK asset reads as empty, one beyond the address space of a 32-bit process as unreadable
+- Add a clean end to the fade of an empty flex EG
+- The fade of a voice turned off ends its flex EG without a stage number of its own, also for an EG without points
+- A native test turns off voices with empty flex EGs in every off mode
+- Add the fixes of the light review
+- Release the global reference of the AssetManager when its backend is refused
+- Wrap the README paragraph on loads and end pubspec.yaml with a newline
+
 ## 0.2.0 - 2026-10-12
 
 ### Added

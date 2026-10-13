@@ -1,0 +1,6 @@
+// An instrument the example loads from the assets of its APK on Android
+// (ticket 27): the include, the default_path and the sample resolve inside
+// the APK, and the sample is named in another case than its file.
+#include "../../common.sfz"
+<control> default_path=../../samples/
+<region> sample=a4.wav pitch_keycenter=69

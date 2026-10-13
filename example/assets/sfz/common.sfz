@@ -1,0 +1,3 @@
+// The settings the presets of the example share; main.sfz includes it with
+// a path that climbs out of its folder.
+<control> default_path=samples/

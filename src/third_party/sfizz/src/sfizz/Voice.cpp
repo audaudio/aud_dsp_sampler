@@ -8,6 +8,12 @@
 // voice whose file still streams plays silence past what the stream
 // delivered and keeps its position, instead of ending at the head. A voice
 // whose file the pool does not hold goes back to idle when it starts.
+// Ticket 27: a voice with a flex EG for its amplitude that is turned off,
+// e.g. stolen, fades over off_time or quickly, as one with the ADSR does,
+// instead of over its whole release; the sustain pedal and the sostenuto
+// pedal each follow their own switch (sustain_sw, sostenuto_sw), which
+// were swapped, so that a voice held by the pedal of an instrument with
+// sostenuto_sw=off was never released.
 
 #include "Voice.h"
 #include "Layer.h"
@@ -620,7 +626,13 @@ void Voice::Impl::off(int delay, bool fast) noexcept
         egAmplitude_.stopDynamicUpdates();
     }
     else {
-        // TODO(jpc): Flex AmpEG
+        // Like the ADSR above (aud_dsp_sampler, ticket 27).
+        FlexEnvelope& eg = *flexEGs_[*region_->flexAmpEG];
+        if (region_->offMode == OffMode::fast || fast) {
+            eg.setReleaseTime(Default::offTime);
+        } else if (region_->offMode == OffMode::time) {
+            eg.setReleaseTime(region_->offTime);
+        }
     }
 
     offed_ = true;
@@ -670,7 +682,7 @@ void Voice::registerCC(int delay, int ccNumber, float ccValue) noexcept
     if (ccNumber != region.sustainCC && ccNumber != region.sostenutoCC)
         return;
 
-    if (region.checkSustain && (ccNumber == region.sostenutoCC)) {
+    if (region.checkSostenuto && (ccNumber == region.sostenutoCC)) {
         if (ccValue < region.sostenutoThreshold) {
             impl.sostenutoState_ = Impl::SostenutoState::Up;
         } else if (impl.sostenutoState_ == Impl::SostenutoState::Up) {
@@ -678,7 +690,7 @@ void Voice::registerCC(int delay, int ccNumber, float ccValue) noexcept
         }
     }
 
-    if (region.checkSostenuto && (ccNumber == region.sustainCC)) {
+    if (region.checkSustain && (ccNumber == region.sustainCC)) {
         if (ccValue < region.sustainThreshold) {
             impl.sustainState_ = Impl::SustainState::Up;
         } else {

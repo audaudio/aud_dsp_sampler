@@ -162,7 +162,52 @@ void main() {
 
 The example app of `aud_audio` plays the sampler on its sampler page;
 `example/` of this package shows the ids of the node and a preset, and
-proves the link hook.
+proves the link hook. Its integration test loads an instrument from the
+assets of its APK on an Android device:
+
+```bash
+cd example && flutter test integration_test/apk_assets_test.dart -d <device>
+```
+
+## Load instruments from Android assets
+
+On Android the sampler reads SFZ files and their samples from the assets of
+the APK in place, without copying them out, the way the legacy audio engine
+of Audanika did. A path that starts with `apk:/` names an asset:
+
+```dart
+graph.setString(
+  piano,
+  AudSfzSampler.sfzFile,
+  'apk:/content/sfz/presets/piano/main.sfz', // assets/content/sfz/... in the APK
+);
+```
+
+- The path after `apk:/` is the path inside the assets of the APK:
+  `apk:/content/sfz/x.sfz` for `android/app/src/main/assets/content/sfz/x.sfz`,
+  `apk:/flutter_assets/assets/sfz/x.sfz` for the Flutter asset
+  `assets/sfz/x.sfz`. The relative paths inside the SFZ file - `sample=`,
+  `#include`, `default_path`, with `..` - resolve inside the APK as well,
+  and so does a `scala_file` or the `sfz_virtual_path` of an SFZ text.
+- Samples are read through `AAssetManager`: an uncompressed asset is mapped
+  from the APK without a copy, a compressed one is inflated into memory
+  while it is read. Keep the samples uncompressed; Android does not compress
+  `.wav`, `.ogg` and `.mp3` by default, for `.flac` add it to `noCompress`.
+  The loads and the streams of notes run on the workers of the engine, as
+  with files.
+- When the exact name of a sample is not there, the file name is matched
+  without regard to case; the folders of the path must match exactly, since
+  an APK lists the files of a folder, not its subfolders. No listing file
+  is needed.
+- The package gets the `AssetManager` itself: its Android plugin hands the
+  one of the app to the native library when the process starts, before any
+  Dart code runs. An app with its own JNI may call
+  `aud_dsp_sampler_set_android_assets` instead. On iOS and the other
+  platforms a load of an `apk:/` path ends with `AUD_ERROR_UNSUPPORTED` and
+  a message that says so; normal paths work everywhere.
+- The store keys a sample by its lexically normal path, so that presets in
+  different folders that reach one sample through different relative paths
+  share it.
 
 ## How It Works
 
@@ -184,7 +229,8 @@ proves the link hook.
   change of the polyphony or the tuning loads the instrument again, and
   the notes that sound fade out.
 - The tail of the node is the longest amplitude release of its
-  instrument. The transport reaches sfizz - tempo, time signature,
+  instrument, of the ADSR or of the flex EG that replaces it
+  (`egN_ampeg`). The transport reaches sfizz - tempo, time signature,
   position and playing state - for its tempo-synced modulation. An
   offline render runs sfizz at its best quality.
 
@@ -192,7 +238,8 @@ proves the link hook.
 
 - `sfz_file` and `sfz_text` start a load on a worker thread of the engine
   and return its id at once; an empty file or text unloads the
-  instrument. `sfz_virtual_path` names the path the samples of the next
+  instrument, as does one without regions, e.g. a text with only a
+  comment. `sfz_virtual_path` names the path the samples of the next
   text resolve against; `scala_file` and `scala_text` load a tuning with
   the instrument.
 - The load fills a standby synth configured like the one that plays. The
@@ -201,12 +248,12 @@ proves the link hook.
   controllers, the pitch bend, the pressure and the program as restored
   values, so no region that a controller triggers starts.
 - A newer load cancels one that runs; a failed load keeps the instrument
-  that plays. A load fails when sfizz cannot parse the instrument (the
-  message quotes the first error), when it can read none of its samples,
-  or with `AUD_ERROR_CAPACITY` when the heads of its samples alone exceed
-  the sample cache budget. A load that ends well names the samples it
-  could not read and the effect types sfizz does not know, which pass the
-  signal through.
+  that plays. A load fails when sfizz cannot read the instrument, or
+  finds errors and no region in it (the message quotes the first error),
+  when it can read none of its samples, or with `AUD_ERROR_CAPACITY` when
+  the heads of its samples alone exceed the sample cache budget. A load that
+  ends well names the samples it could not read and the effect types sfizz
+  does not know, which pass the signal through.
 - Before the first instrument the node ramps the volume and remembers the
   controllers for it. No exception crosses the C ABI: a load that runs out
   of memory ends with `AUD_ERROR_OUT_OF_MEMORY`. A host api that lacks a
@@ -233,6 +280,11 @@ proves the link hook.
   file the app can read - absolute paths and `../` work, which SFZ
   libraries use to share samples. The sandbox of the app bounds what it
   reaches.
+- Besides the filesystem the fork reads files a backend serves, named by a
+  scheme: `VirtualFile.h` holds the backends, the parser, the store, the
+  audio readers and the Scala tuning ask it first. `apk:/` is the backend
+  of the assets of an Android app (`src/aud_apk_assets.cpp`); the native
+  tests serve a folder of the host as the assets.
 
 ### Messages
 
@@ -260,6 +312,10 @@ proves the link hook.
   Audanika's own code after the Audio EQ Cookbook, the Faust-generated
   code that stays ships the STK-4.3 notice, and fverb, the metronome and
   cephes are gone.
+- The library builds for every ABI of Android, the 32-bit `armeabi-v7a`
+  among them, where Abseil's 128-bit integer has no compiler type and
+  needs `int128.cc`. On Android it links with `--no-undefined`: a symbol
+  the subset lacks fails the build instead of the load in the app.
 
 ### The Dart API
 
@@ -271,6 +327,9 @@ proves the link hook.
   registers with the host api of a graph and throws an
   `AudDspSamplerException` with the result code when the engine refuses,
   `storeBytes` and `storeFiles` read the store of the process.
+- The package is an Android plugin without a Flutter dependency: Flutter
+  builds the Java shim in `android/`, a content provider that hands the
+  `AssetManager` of the app to the native library when the process starts.
 - Every member of `AudDspSampler` is recorded with `@RecordUse`: in a
   profile or release build the link hook keeps the native library only
   when the app uses one of them.

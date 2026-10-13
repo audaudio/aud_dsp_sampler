@@ -27,6 +27,18 @@ external int aud_dsp_sampler_store_bytes();
 @ffi.Native<ffi.Int32 Function()>()
 external int aud_dsp_sampler_store_files();
 
+/// [control] Gives the sampler the assets of an Android app, an AAssetManager*:
+/// a path "apk:/<path>" in sfz_file, scala_file or sfz_virtual_path, and
+/// inside an SFZ file, then names an asset of the APK, read in place. The
+/// Android plugin of the package calls it when the app process starts; an
+/// app with its own JNI may call it instead. AUD_OK, AUD_ERROR_INVALID_ARGUMENT
+/// for NULL, AUD_ERROR_UNSUPPORTED off Android, where a load of an apk:/ path
+/// ends with AUD_ERROR_UNSUPPORTED.
+@ffi.Native<ffi.Int32 Function(ffi.Pointer<ffi.Void>)>()
+external int aud_dsp_sampler_set_android_assets(
+  ffi.Pointer<ffi.Void> asset_manager,
+);
+
 const String AUD_DSP_SAMPLER_SFZ_TYPE_ID = 'aud.sampler.sfz';
 
 const int AUD_SFZ_KEY_FILE = 0;

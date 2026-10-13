@@ -1,5 +1,4 @@
-# The example runs against the sibling checkouts of the ticket, so that it
-# sees the unreleased versions of the family (ticket 25).
-dependency_overrides:
-  aud_audio_core:
-    path: ../../aud_audio_core
+# The example resolves the family from the git tags of the package, like the
+# package itself; a ticket with sibling checkouts of unreleased versions adds
+# them here as path overrides.
+dependency_overrides: {}

@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): the
+// reader of a virtual file.
+
 #include "ParserPrivate.h"
 
 namespace sfz {
@@ -137,6 +140,19 @@ bool FileReader::hasError()
 int FileReader::getNextStreamByte()
 {
     return _fileStream.get();
+}
+
+VirtualFileReader::VirtualFileReader(const fs::path& filePath, std::unique_ptr<VirtualFileData> data)
+    : Reader(filePath), _data(std::move(data))
+{
+}
+
+int VirtualFileReader::getNextStreamByte()
+{
+    if (_position < _data->size())
+        return static_cast<const unsigned char*>(_data->data())[_position++];
+
+    return kEof;
 }
 
 StringViewReader::StringViewReader(const fs::path& filePath, absl::string_view sfzView)
