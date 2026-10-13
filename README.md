@@ -36,7 +36,7 @@ dependencies:
     git:
       url: git@github.com:audaudio/aud_dsp_sampler.git
       tag_pattern: "{{version}}"
-    version: ^0.2.0
+    version: ^0.3.0
 ```
 
 An app depends on `aud_audio` and on the DSP packages it uses, and
@@ -312,6 +312,12 @@ graph.setString(
   Audanika's own code after the Audio EQ Cookbook, the Faust-generated
   code that stays ships the STK-4.3 notice, and fverb, the metronome and
   cephes are gone.
+- The synths of several nodes load on the workers of the engine at the
+  same time. What they share in the process - the curves of the flex EG
+  shapes, the silent wavetable, the table of the distortion, the CRC
+  table of stb_vorbis and the CPU caps of dr_flac and dr_mp3 - is built
+  once, atomic or guarded by a mutex that only loads take; `NOTICES.md`
+  lists the audit (ticket 28).
 - The library builds for every ABI of Android, the 32-bit `armeabi-v7a`
   among them, where Abseil's 128-bit integer has no compiler type and
   needs `int128.cc`. On Android it links with `--no-undefined`: a symbol
@@ -357,6 +363,12 @@ node scripts/test-native.js
   `AUD_SFIZZ_PRISTINE=<sfizz checkout>` also compares the RBJ filters with
   the Faust originals. The build cache in `.dart_tool` keeps only the
   objects and binaries of the last run.
+- On macOS the thread sanitizer names the files and lines of a report
+  through LLVM's `llvm-symbolizer` and a dSYM bundle of the test binary
+  that LLVM's `dsymutil` writes - from LLVM of Homebrew, or the
+  `llvm-symbolizer` that `AUD_LLVM_SYMBOLIZER` names, with `dsymutil`
+  beside it; Apple's `atos` hung on reports of races. `AUD_RTSAN_CXX`
+  names the compiler of the RealtimeSanitizer build.
 
 ## Contributing
 

@@ -45,6 +45,10 @@ const usage = `Usage: node scripts/test-native.js [options]
   AUD_TEST_FILTER=<part of a name>     run the matching tests only
   AUD_SFIZZ_PRISTINE=<sfizz checkout>  compare the RBJ filters of the fork
                                        with the Faust originals
+  AUD_RTSAN_CXX=<clang++>              the compiler of the rtsan build
+  AUD_LLVM_SYMBOLIZER=<llvm-symbolizer>
+                                       the symbolizer of the tsan reports
+                                       on macOS, beside LLVM's dsymutil
 `;
 
 // The options of the command line; anything else ends the run with the
@@ -194,7 +198,8 @@ function llvmSymbolizer() {
 
 // Writes the debug information of `binary` into a dSYM bundle beside it,
 // from which llvm-symbolizer reads the files and lines of a report; LLVM's
-// dsymutil lies next to the symbolizer.
+// dsymutil lies next to the symbolizer. A failed run leaves no bundle, so
+// the next run tries again.
 function writeDsym(binary, symbolizer) {
   const bundle = `${binary}.dSYM`;
   if (fs.existsSync(bundle)) return;
@@ -203,8 +208,10 @@ function writeDsym(binary, symbolizer) {
     encoding: 'utf8',
   });
   if (result.status !== 0) {
+    fs.rmSync(bundle, { recursive: true, force: true });
+    const reason = result.error?.message ?? result.stderr;
     process.stdout.write(
-      `tsan: dsymutil failed, the reports name no lines\n${result.stderr}`,
+      `tsan: dsymutil failed, the reports name no lines\n${reason}\n`,
     );
   }
 }

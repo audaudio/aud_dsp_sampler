@@ -994,8 +994,9 @@ static void setup_temp_free(vorb *f, void *p, int sz)
 #define CRC32_POLY    0x04c11db7   // from spec
 
 static uint32 crc_table[256];
-// 0: not built, 1: being built, 2: built.
-static atomic_int crc_table_state = 0;
+// The states of the CRC table.
+enum { CRC_TABLE_UNBUILT, CRC_TABLE_BUILDING, CRC_TABLE_BUILT };
+static atomic_int crc_table_state = CRC_TABLE_UNBUILT;
 
 static void crc32_build(void)
 {
@@ -1012,16 +1013,16 @@ static void crc32_build(void)
 // builds it waits for it.
 static void crc32_init(void)
 {
-   int expected = 0;
-   if (atomic_load_explicit(&crc_table_state, memory_order_acquire) == 2)
+   int expected = CRC_TABLE_UNBUILT;
+   if (atomic_load_explicit(&crc_table_state, memory_order_acquire) == CRC_TABLE_BUILT)
       return;
-   if (atomic_compare_exchange_strong_explicit(&crc_table_state, &expected, 1,
-         memory_order_acq_rel, memory_order_acquire)) {
+   if (atomic_compare_exchange_strong_explicit(&crc_table_state, &expected,
+         CRC_TABLE_BUILDING, memory_order_acq_rel, memory_order_acquire)) {
       crc32_build();
-      atomic_store_explicit(&crc_table_state, 2, memory_order_release);
+      atomic_store_explicit(&crc_table_state, CRC_TABLE_BUILT, memory_order_release);
       return;
    }
-   while (atomic_load_explicit(&crc_table_state, memory_order_acquire) != 2)
+   while (atomic_load_explicit(&crc_table_state, memory_order_acquire) != CRC_TABLE_BUILT)
       ;
 }
 

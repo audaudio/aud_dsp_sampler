@@ -37,7 +37,7 @@ dependencies:
     git:
       url: git@github.com:audaudio/aud_dsp_sampler.git
       tag_pattern: "{{version}}"
-    version: ^0.2.0
+    version: ^0.3.0
 ```
 
 Eine App hängt von `aud_audio` und den DSP-Paketen ab, die sie nutzt, und
@@ -325,6 +325,12 @@ graph.setString(
   RBJ-Filter sind Audanikas eigener Code nach dem Audio EQ Cookbook, der
   verbleibende von Faust erzeugte Code trägt den STK-4.3-Hinweis, und
   fverb, das Metronom und cephes sind entfernt.
+- Die Synths mehrerer Knoten laden gleichzeitig auf den Workern der
+  Engine. Was sie im Prozess teilen - die Kurven der Flex-EG-Formen, die
+  stille Wavetable, die Tabelle der Distortion, die CRC-Tabelle von
+  stb_vorbis und die CPU-Fähigkeiten von dr_flac und dr_mp3 - wird einmal
+  gebaut, ist atomar oder wird von einem Mutex geschützt, den nur
+  Ladevorgänge nehmen; `NOTICES.md` listet die Prüfung (Ticket 28).
 - Die Bibliothek baut für jedes ABI von Android, auch für das 32-Bit-ABI
   `armeabi-v7a`, auf dem Abseils 128-Bit-Ganzzahl keinen Compilertyp hat
   und `int128.cc` braucht. Auf Android linkt sie mit `--no-undefined`: Ein
@@ -374,6 +380,12 @@ node scripts/test-native.js
   `AUD_SFIZZ_PRISTINE=<sfizz checkout>` vergleicht die RBJ-Filter
   zusätzlich mit den Faust-Originalen. Der Build-Cache in `.dart_tool`
   behält nur die Objekte und Binaries des letzten Laufs.
+- Auf macOS nennt der Thread-Sanitizer die Dateien und Zeilen einer
+  Meldung über `llvm-symbolizer` von LLVM und ein dSYM-Bundle des
+  Testprogramms, das `dsymutil` von LLVM schreibt - aus LLVM von Homebrew
+  oder der `llvm-symbolizer`, den `AUD_LLVM_SYMBOLIZER` nennt, mit
+  `dsymutil` daneben; Apples `atos` hing bei Meldungen von Races.
+  `AUD_RTSAN_CXX` nennt den Compiler des RealtimeSanitizer-Builds.
 
 ## Mitwirken
 

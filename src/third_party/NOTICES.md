@@ -88,10 +88,10 @@ Changed:
   were the first of the process built it into the one table.
 - `sfizz/src/sfizz/effects/Disto.cpp`: the table of the Faust distortion
   stages is filled once instead of by every stage that is built or set to a
-  sample rate, while the stages of other synths read it. A new sample rate
-  sets the constants of each stage for that rate; the original kept those of
-  the default rate (48 kHz), so the distortion sounds different from 0.3.0
-  at other rates.
+  sample rate, while the stages of other synths read it. The table does not
+  depend on the sample rate, and a new rate still sets the constants of each
+  stage, as the original did: the distortion sounds as in 0.3.0 at every
+  rate.
 - `sfizz/external/st_audiofile/thirdparty/stb_vorbis/stb_vorbis.c`: the CRC
   table, built again on every open of an Ogg file, is built once.
 - `sfizz/external/st_audiofile/thirdparty/dr_libs/dr_flac.h`: the CPU caps,

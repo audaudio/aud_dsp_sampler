@@ -1753,25 +1753,18 @@ static drflac_bool32 drflac__gIsSSE41Supported = DRFLAC_FALSE;
 /* Runs once per process, see drflac__init_cpu_caps(). */
 static void drflac__detect_cpu_caps(void)
 {
-    static drflac_bool32 isCPUCapsInitialized = DRFLAC_FALSE;
-
-    if (!isCPUCapsInitialized) {
-        /* LZCNT */
+    /* LZCNT */
 #if defined(DRFLAC_HAS_LZCNT_INTRINSIC)
-        int info[4] = {0};
-        drflac__cpuid(info, 0x80000001);
-        drflac__gIsLZCNTSupported = (info[2] & (1 << 5)) != 0;
+    int info[4] = {0};
+    drflac__cpuid(info, 0x80000001);
+    drflac__gIsLZCNTSupported = (info[2] & (1 << 5)) != 0;
 #endif
 
-        /* SSE2 */
-        drflac__gIsSSE2Supported = drflac_has_sse2();
+    /* SSE2 */
+    drflac__gIsSSE2Supported = drflac_has_sse2();
 
-        /* SSE4.1 */
-        drflac__gIsSSE41Supported = drflac_has_sse41();
-
-        /* Initialized. */
-        isCPUCapsInitialized = DRFLAC_TRUE;
-    }
+    /* SSE4.1 */
+    drflac__gIsSSE41Supported = drflac_has_sse41();
 }
 #else
 static drflac_bool32 drflac__gIsNEONSupported  = DRFLAC_FALSE;
@@ -1805,8 +1798,9 @@ static void drflac__detect_cpu_caps(void)
 }
 #endif
 
-/* 0: not detected, 1: being detected, 2: detected. */
-static atomic_int drflac__gCPUCapsState = 0;
+/* The states of the detection of the CPU caps. */
+enum { DRFLAC_CPU_CAPS_UNDETECTED, DRFLAC_CPU_CAPS_DETECTING, DRFLAC_CPU_CAPS_DETECTED };
+static atomic_int drflac__gCPUCapsState = DRFLAC_CPU_CAPS_UNDETECTED;
 
 /*
 Detects the CPU caps once per process; a thread that comes while another one detects them waits for it. A decoder reads
@@ -1814,16 +1808,16 @@ them after it was opened, so after this returned.
 */
 static void drflac__init_cpu_caps(void)
 {
-    int expected = 0;
-    if (atomic_load_explicit(&drflac__gCPUCapsState, memory_order_acquire) == 2) {
+    int expected = DRFLAC_CPU_CAPS_UNDETECTED;
+    if (atomic_load_explicit(&drflac__gCPUCapsState, memory_order_acquire) == DRFLAC_CPU_CAPS_DETECTED) {
         return;
     }
-    if (atomic_compare_exchange_strong_explicit(&drflac__gCPUCapsState, &expected, 1, memory_order_acq_rel, memory_order_acquire)) {
+    if (atomic_compare_exchange_strong_explicit(&drflac__gCPUCapsState, &expected, DRFLAC_CPU_CAPS_DETECTING, memory_order_acq_rel, memory_order_acquire)) {
         drflac__detect_cpu_caps();
-        atomic_store_explicit(&drflac__gCPUCapsState, 2, memory_order_release);
+        atomic_store_explicit(&drflac__gCPUCapsState, DRFLAC_CPU_CAPS_DETECTED, memory_order_release);
         return;
     }
-    while (atomic_load_explicit(&drflac__gCPUCapsState, memory_order_acquire) != 2) {
+    while (atomic_load_explicit(&drflac__gCPUCapsState, memory_order_acquire) != DRFLAC_CPU_CAPS_DETECTED) {
     }
 }
 

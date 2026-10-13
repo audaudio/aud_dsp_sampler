@@ -13,6 +13,14 @@
 - NOTICES.md lists the changed files and the audit of the shared state
 - Add the sample rate of the distortion stages to the notes
 - A new sample rate sets the constants of each stage; the original kept those of 48 kHz
+- Add the review fixes of the shared state notes
+- Correct the notes of Disto.cpp and NOTICES.md: a new sample rate set the constants of each stage before too, the distortion sounds as in 0.3.0
+- Drop the inner flag of dr_flac's CPU detection, which the once guard makes redundant
+- Name the states of the once guards of dr_flac and stb_vorbis instead of 0, 1 and 2
+- Let a failed dsymutil leave no dSYM bundle and name its error, also when it is missing
+- List AUD_RTSAN_CXX and AUD_LLVM_SYMBOLIZER in the usage of scripts/test-native.js
+- Describe the TSan symbolizer on macOS and the shared state of the synths in README.md and README.de.md
+- Raise the version in the installation of both READMEs to ^0.3.0
 
 ## 0.3.0 - 2026-10-13
 
