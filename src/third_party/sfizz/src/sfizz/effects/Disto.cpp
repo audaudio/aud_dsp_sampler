@@ -8,7 +8,10 @@
 // table of the distortion stages, one per process and the same for every
 // sample rate, is filled once instead of by every stage that is built or
 // set to a sample rate, which wrote it while synths loaded on other threads
-// and stages of playing synths read it.
+// and stages of playing synths read it. A new sample rate now sets the
+// constants of each stage for that rate (instanceConstants); the original
+// only filled the table again and kept the constants of the default rate,
+// so that the distortion sounded alike only at 48 kHz.
 
 /*
    Note(jpc): implementation status

@@ -11,6 +11,8 @@
 - The CRC table of stb_vorbis and the CPU detection of dr_flac and dr_mp3 are set up once
 - Regression tests load in parallel threads and on the engine's workers; TSan reports file and line on macOS
 - NOTICES.md lists the changed files and the audit of the shared state
+- Add the sample rate of the distortion stages to the notes
+- A new sample rate sets the constants of each stage; the original kept those of 48 kHz
 
 ## 0.3.0 - 2026-10-13
 
