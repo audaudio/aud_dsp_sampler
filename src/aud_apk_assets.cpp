@@ -143,6 +143,8 @@ Java_com_audanika_aud_1dsp_1sampler_AudDspSamplerAssets_nativeSetAssetManager(JN
   if (env == nullptr || manager == nullptr) return;
   jobject kept = env->NewGlobalRef(manager);
   if (kept == nullptr) return;
-  aud_sfz::setAndroidAssets(AAssetManager_fromJava(env, kept));
+  if (aud_sfz::setAndroidAssets(AAssetManager_fromJava(env, kept)) != AUD_OK) {
+    env->DeleteGlobalRef(kept);
+  }
 }
 #endif

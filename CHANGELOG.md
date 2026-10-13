@@ -22,6 +22,9 @@
 - Add a clean end to the fade of an empty flex EG
 - The fade of a voice turned off ends its flex EG without a stage number of its own, also for an EG without points
 - A native test turns off voices with empty flex EGs in every off mode
+- Add the fixes of the light review
+- Release the global reference of the AssetManager when its backend is refused
+- Wrap the README paragraph on loads and end pubspec.yaml with a newline
 
 ## 0.2.0 - 2026-10-12
 

@@ -251,9 +251,9 @@ graph.setString(
   that plays. A load fails when sfizz cannot read the instrument, or
   finds errors and no region in it (the message quotes the first error),
   when it can read none of its samples, or with `AUD_ERROR_CAPACITY` when
-  the heads of its samples alone exceed the sample cache budget. A load that ends well names the samples it
-  could not read and the effect types sfizz does not know, which pass the
-  signal through.
+  the heads of its samples alone exceed the sample cache budget. A load that
+  ends well names the samples it could not read and the effect types sfizz
+  does not know, which pass the signal through.
 - Before the first instrument the node ramps the volume and remembers the
   controllers for it. No exception crosses the C ABI: a load that runs out
   of memory ends with `AUD_ERROR_OUT_OF_MEMORY`. A host api that lacks a
