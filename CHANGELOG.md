@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add thread safety to the state all synths of a process share
+- A mutex guards the curves of flex envelopes, which parallel loads corrupted (an app crashed on a preset change)
+- The silence wavetable is built once and thread-safe
+- The Faust table of the distortion is filled once instead of by every stage
+- The CRC table of stb_vorbis and the CPU detection of dr_flac and dr_mp3 are set up once
+- Regression tests load in parallel threads and on the engine's workers; TSan reports file and line on macOS
+- NOTICES.md lists the changed files and the audit of the shared state
+
 ## 0.3.0 - 2026-10-13
 
 ### Added
@@ -147,6 +159,7 @@
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
 
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
+
 
 ## 0.1.0 - 2026-10-08
 

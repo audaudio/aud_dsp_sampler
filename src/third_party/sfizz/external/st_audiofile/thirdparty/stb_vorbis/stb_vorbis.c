@@ -11,6 +11,10 @@
 //
 //   See end of file for license information.
 //
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): the
+// CRC table is built once per process. Every decoder that opened a file
+// built it again, while decoders on other threads read it.
+//
 // Limitations:
 //
 //   - floor 0 not supported (used in old ogg vorbis files pre-2004)
@@ -599,6 +603,7 @@ enum STBVorbisError
 #endif // STB_VORBIS_NO_CRT
 
 #include <limits.h>
+#include <stdatomic.h>
 
 #ifdef __MINGW32__
    // eff you mingw:
@@ -989,7 +994,10 @@ static void setup_temp_free(vorb *f, void *p, int sz)
 #define CRC32_POLY    0x04c11db7   // from spec
 
 static uint32 crc_table[256];
-static void crc32_init(void)
+// 0: not built, 1: being built, 2: built.
+static atomic_int crc_table_state = 0;
+
+static void crc32_build(void)
 {
    int i,j;
    uint32 s;
@@ -998,6 +1006,23 @@ static void crc32_init(void)
          s = (s << 1) ^ (s >= (1U<<31) ? CRC32_POLY : 0);
       crc_table[i] = s;
    }
+}
+
+// Builds the table once per process; a thread that comes while another one
+// builds it waits for it.
+static void crc32_init(void)
+{
+   int expected = 0;
+   if (atomic_load_explicit(&crc_table_state, memory_order_acquire) == 2)
+      return;
+   if (atomic_compare_exchange_strong_explicit(&crc_table_state, &expected, 1,
+         memory_order_acq_rel, memory_order_acquire)) {
+      crc32_build();
+      atomic_store_explicit(&crc_table_state, 2, memory_order_release);
+      return;
+   }
+   while (atomic_load_explicit(&crc_table_state, memory_order_acquire) != 2)
+      ;
 }
 
 static __forceinline uint32 crc32_update(uint32 crc, uint8 byte)
@@ -3704,7 +3729,7 @@ static int start_decoder(vorb *f)
    }
    #endif
 
-   crc32_init(); // always init it, to avoid multithread race conditions
+   crc32_init(); // builds the table the first time
 
    if (get8_packet(f) != VORBIS_packet_setup)       return error(f, VORBIS_invalid_setup);
    for (i=0; i < 6; ++i) header[i] = get8_packet(f);

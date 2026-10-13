@@ -8,16 +8,19 @@
 // their own, without the node (ticket 27): the engine renders blocks of any
 // size up to the largest, e.g. Android's callbacks of 64 to 960 frames, and
 // every effect processes them as it processes whole blocks, without a
-// failed check that writes to stderr on the audio thread.
+// failed check that writes to stderr on the audio thread. Synths with a
+// distortion load on several threads at once without a race (ticket 28).
 //
 // The instruments play sfizz's sine generator, so no file enters the store.
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "AudioSpan.h"
@@ -154,4 +157,40 @@ AUD_TEST(sfizz_effects_link_the_channels_on_every_frame) {
     const Render shortBlocks = render(text, kShortBlocks);
     AUD_CHECK(differenceOf(whole, shortBlocks) < 1e-6f);
   }
+}
+
+// ############################################################################
+// Synths that load at the same time
+
+AUD_TEST(sfizz_effects_disto_loads_on_several_threads_at_once) {
+  // Threads load instruments with a distortion and set their sample rate
+  // while this thread renders one. The stages of every distortion read one
+  // table, which every stage that was built or set to a sample rate filled
+  // again while the others read it; it is filled once per process now.
+  const std::string text = std::string(kSine) + "<effect> type=disto disto_depth=50\n";
+  const Render before = render(text, kWholeBlocks);
+  constexpr int kThreads = 3;
+  constexpr int kLoads = 20;
+  std::atomic<bool> start{false};
+  std::vector<int> loaded(kThreads, 0);
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t] {
+      while (!start.load()) std::this_thread::yield();
+      sfz::Synth synth;
+      for (int i = 0; i < kLoads; ++i) {
+        if (!synth.loadSfzString("/aud_dsp_sampler/disto.sfz", text)) continue;
+        synth.setSampleRate(i % 2 == 0 ? 44100.0f : 48000.0f);
+        loaded[t] += 1;
+      }
+    });
+  }
+  start.store(true);
+  const Render during = render(text, kWholeBlocks);
+  for (std::thread& thread : threads) thread.join();
+  AUD_CHECK(loaded == std::vector<int>(kThreads, kLoads));
+  // The table is the same for every sample rate: the distortion sounds as
+  // it did before the others loaded.
+  AUD_CHECK(during.errors.empty());
+  AUD_CHECK(differenceOf(before, during) < 1e-6f);
 }

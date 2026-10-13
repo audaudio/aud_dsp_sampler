@@ -4,6 +4,12 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): the
+// table of the distortion stages, one per process and the same for every
+// sample rate, is filled once instead of by every stage that is built or
+// set to a sample rate, which wrote it while synths loaded on other threads
+// and stages of playing synths read it.
+
 /*
    Note(jpc): implementation status
 
@@ -31,6 +37,16 @@ static constexpr int _oversampling = 8;
 
 namespace sfz {
 namespace fx {
+
+// Fills the table every distortion stage reads, once per process.
+static void initializeStageTable()
+{
+    static const bool initialized = [] {
+        faustDisto::classInit(_oversampling * config::defaultSampleRate);
+        return true;
+    }();
+    (void)initialized;
+}
 
 struct Disto::Impl {
     enum { maxStages = 4 };
@@ -62,9 +78,10 @@ Disto::Disto()
 {
     Impl& impl = *_impl;
 
+    initializeStageTable();
     for (unsigned c = 0; c < EffectChannels; ++c) {
         for (faustDisto& stage : impl._stages[c])
-            stage.init(_oversampling * config::defaultSampleRate);
+            stage.instanceInit(_oversampling * config::defaultSampleRate);
     }
 }
 
@@ -78,10 +95,8 @@ void Disto::setSampleRate(double sampleRate)
     impl._samplePeriod = 1.0 / sampleRate;
 
     for (unsigned c = 0; c < EffectChannels; ++c) {
-        for (faustDisto& stage : impl._stages[c]) {
-            stage.classInit(_oversampling * sampleRate);
+        for (faustDisto& stage : impl._stages[c])
             stage.instanceConstants(_oversampling * sampleRate);
-        }
     }
 
     clear();

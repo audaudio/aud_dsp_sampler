@@ -81,5 +81,41 @@ void main() {
       );
       expect(graph.cacheUsage.bytes, greaterThanOrEqualTo(5 * 8192 * 4));
     });
+
+    test('loads flex envelopes on several nodes at once', () {
+      // The nodes of an app that starts load at the same time on the workers
+      // of the engine. Their flex envelopes share the curves of their shapes
+      // in the process, whose map parallel loads corrupted (ticket 28).
+      final graph = samplerGraph();
+      final nodes = [
+        for (var i = 0; i < 4; i++) graph.createNode(AudSfzSampler.typeId),
+      ];
+      graph.transaction((tx) {
+        for (final node in nodes) {
+          tx.connect(node, graph.io);
+        }
+      });
+      graph.start();
+      final ids = <int>[];
+      for (var round = 0; round < 10; round++) {
+        for (final (index, node) in nodes.indexed) {
+          final shape = 0.5 + index + round / 32;
+          ids.add(
+            graph.setString(
+              node,
+              AudSfzSampler.sfzText,
+              '<region> sample=*sine eg1_ampeg=1 eg1_sustain=2 '
+              'eg1_time1=0.01 eg1_level1=1 eg1_shape1=$shape '
+              'eg1_time2=0.02 eg1_level2=0.5 eg1_shape2=-2 '
+              'eg1_time3=0.2 eg1_level3=0',
+            ),
+          );
+        }
+        expect(graph.waitLoads(timeout: const Duration(seconds: 10)), isTrue);
+      }
+      expect([
+        for (final id in ids) graph.loadOf(id)?.result,
+      ], List.filled(ids.length, AUD_OK));
+    });
   });
 }

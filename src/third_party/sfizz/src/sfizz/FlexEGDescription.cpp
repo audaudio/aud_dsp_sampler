@@ -4,11 +4,19 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): the
+// curves of the shapes, which every synth of the process shares, are guarded
+// by a mutex. Synths load on several worker threads at once, and their
+// regions asked for and dropped curves of the one map without a lock, which
+// corrupted it. Only loads take the lock; a voice reads the curve its point
+// holds.
+
 #include "FlexEGDescription.h"
 #include "Curve.h"
 #include "MidiState.h"
 #include <absl/container/flat_hash_map.h>
 #include <cmath>
+#include <mutex>
 
 namespace sfz {
 
@@ -27,19 +35,25 @@ const Curve& FlexEGPoint::curve() const
 }
 
 ///
-typedef absl::flat_hash_map<float, std::weak_ptr<Curve>> FlexEGShapes;
+// The curves of the shapes of the process, held while a point uses them.
+struct FlexEGShapes {
+    std::mutex mutex;
+    absl::flat_hash_map<float, std::weak_ptr<Curve>> curves;
+};
 
-static FlexEGShapes& getShapeMap()
+// Never destroyed: a load may still run on a worker thread at exit.
+static FlexEGShapes& getShapes()
 {
-    static FlexEGShapes shapes;
-    return shapes;
+    static FlexEGShapes* shapes = new FlexEGShapes();
+    return *shapes;
 }
 
 std::shared_ptr<Curve> FlexEGs::getShapeCurve(float shape)
 {
-    static FlexEGShapes& map = getShapeMap();
+    FlexEGShapes& shapes = getShapes();
+    std::lock_guard<std::mutex> lock { shapes.mutex };
 
-    std::weak_ptr<Curve>& slot = map[shape];
+    std::weak_ptr<Curve>& slot = shapes.curves[shape];
 
     std::shared_ptr<Curve> curve = slot.lock();
     if (curve)
@@ -75,11 +89,12 @@ std::shared_ptr<Curve> FlexEGs::getShapeCurve(float shape)
 
 void FlexEGs::clearUnusedCurves()
 {
-    static FlexEGShapes& map = getShapeMap();
+    FlexEGShapes& shapes = getShapes();
+    std::lock_guard<std::mutex> lock { shapes.mutex };
 
-    for (auto it = map.begin(); it != map.end(); ) {
+    for (auto it = shapes.curves.begin(); it != shapes.curves.end(); ) {
         if (it->second.use_count() == 0)
-            map.erase(it++);
+            shapes.curves.erase(it++);
         else
             ++it;
     }

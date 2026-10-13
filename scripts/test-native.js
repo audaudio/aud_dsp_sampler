@@ -96,6 +96,14 @@ const rtsanCandidates = [
   'clang++',
 ].filter(Boolean);
 
+// The llvm-symbolizers the thread sanitizer may report with on macOS, those
+// of LLVM from Homebrew; on other systems it finds one itself.
+const symbolizerCandidates = [
+  process.env.AUD_LLVM_SYMBOLIZER,
+  '/opt/homebrew/opt/llvm/bin/llvm-symbolizer',
+  '/usr/local/opt/llvm/bin/llvm-symbolizer',
+].filter(Boolean);
+
 // The defines the build hook passes for sfizz. The hook builds in release
 // mode, where CBuilder defines NDEBUG: sfizz's debug messages, which write
 // to stderr on the audio thread, are gone. The tests keep sfizz's asserts.
@@ -174,6 +182,38 @@ function works(compiler, flags) {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// The llvm-symbolizer the thread sanitizer reports with on macOS, or null.
+// There it asks atos first, which hung on reports of races between threads
+// that load (ticket 28) instead of letting the run fail.
+function llvmSymbolizer() {
+  if (process.platform !== 'darwin') return null;
+  return symbolizerCandidates.find((file) => fs.existsSync(file)) ?? null;
+}
+
+// Writes the debug information of `binary` into a dSYM bundle beside it,
+// from which llvm-symbolizer reads the files and lines of a report; LLVM's
+// dsymutil lies next to the symbolizer.
+function writeDsym(binary, symbolizer) {
+  const bundle = `${binary}.dSYM`;
+  if (fs.existsSync(bundle)) return;
+  const dsymutil = path.join(path.dirname(symbolizer), 'dsymutil');
+  const result = spawnSync(dsymutil, [binary, '-o', bundle], {
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    process.stdout.write(
+      `tsan: dsymutil failed, the reports name no lines\n${result.stderr}`,
+    );
+  }
+}
+
+// The options of the thread sanitizer: every report fails the run.
+function tsanOptions(symbolizer) {
+  const options = 'halt_on_error=1:second_deadlock_stack=1';
+  if (symbolizer === null) return options;
+  return `${options}:external_symbolizer_path=${symbolizer}`;
 }
 
 function rtsanCompiler() {
@@ -319,7 +359,8 @@ async function build(name, compiler, variantFlags, context) {
       process.exit(result.status ?? 1);
     }
   }
-  prune(outDir, [...objects, binary]);
+  // The dSYM bundle of the binary, when the tsan run wrote one.
+  prune(outDir, [...objects, binary, `${binary}.dSYM`]);
   return binary;
 }
 
@@ -465,9 +506,9 @@ async function main() {
       return;
     }
     const tsan = await build('tsan', compiler, ['-fsanitize=thread'], context);
-    run('tsan', tsan, {
-      TSAN_OPTIONS: 'halt_on_error=1:second_deadlock_stack=1',
-    });
+    const symbolizer = llvmSymbolizer();
+    if (symbolizer !== null) writeDsym(tsan, symbolizer);
+    run('tsan', tsan, { TSAN_OPTIONS: tsanOptions(symbolizer) });
   }
 }
 

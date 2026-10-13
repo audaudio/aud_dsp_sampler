@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): the
+// silent wavetable is built once per process, with a thread-safe static,
+// instead of behind a plain flag that two threads building their first
+// synths at once both found unset.
+
 #include "Wavetables.h"
 #include "FilePool.h"
 #include "Interpolators.h"
@@ -390,21 +395,22 @@ WavetableMulti WavetableMulti::createForHarmonicProfile(
     return wm;
 }
 
+// Built once per process: the voices of synths that load on several worker
+// threads at once ask for it when they are built. The audio thread asks when
+// a voice starts, after its synth was built, and finds it without a lock.
 const WavetableMulti* WavetableMulti::getSilenceWavetable()
 {
-    static WavetableMulti wm;
-    static bool initialized { false };
-
-    if (!initialized) {
+    static const WavetableMulti wm = []() {
+        WavetableMulti silence;
         constexpr unsigned numTables = WavetableMulti::numTables();
-        wm.allocateStorage(1);
+        silence.allocateStorage(1);
         for (unsigned m = 0; m < numTables; ++m) {
-            float* ptr = const_cast<float*>(wm.getTablePointer(m));
+            float* ptr = const_cast<float*>(silence.getTablePointer(m));
             *ptr = 0;
         }
-        wm.fillExtra();
-        initialized = true;
-    }
+        silence.fillExtra();
+        return silence;
+    }();
     return &wm;
 }
 

@@ -10,6 +10,11 @@ Based on minimp3 (https://github.com/lieff/minimp3) which is where the real work
 */
 
 /*
+Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): where the support of SSE2 is detected at run time,
+on 32-bit x86, the result is an atomic integer. Decoders on several threads stored and read it at the same time.
+*/
+
+/*
 RELEASE NOTES - VERSION 0.6
 ===========================
 Version 0.6 includes breaking changes with the configuration of decoders. The ability to customize the number of output channels and the sample rate has been
@@ -536,6 +541,7 @@ DRMP3_API void drmp3_free(void* p, const drmp3_allocation_callbacks* pAllocation
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h> /* For INT_MAX */
+#include <stdatomic.h>
 
 DRMP3_API void drmp3_version(drmp3_uint32* pMajor, drmp3_uint32* pMinor, drmp3_uint32* pRevision)
 {
@@ -659,25 +665,29 @@ static int drmp3_have_simd(void)
 #ifdef DR_MP3_ONLY_SIMD
     return 1;
 #else
-    static int g_have_simd;
+    /* Every thread that detects it stores the same value. */
+    static atomic_int g_have_simd = 0;
+    int have_simd;
     int CPUInfo[4];
 #ifdef MINIMP3_TEST
     static int g_counter;
     if (g_counter++ > 100)
         return 0;
 #endif
-    if (g_have_simd)
+    have_simd = atomic_load_explicit(&g_have_simd, memory_order_relaxed);
+    if (have_simd)
         goto end;
     drmp3_cpuid(CPUInfo, 0);
     if (CPUInfo[0] > 0)
     {
         drmp3_cpuid(CPUInfo, 1);
-        g_have_simd = (CPUInfo[3] & (1 << 26)) + 1; /* SSE2 */
-        return g_have_simd - 1;
+        have_simd = (CPUInfo[3] & (1 << 26)) + 1; /* SSE2 */
+        atomic_store_explicit(&g_have_simd, have_simd, memory_order_relaxed);
+        return have_simd - 1;
     }
 
 end:
-    return g_have_simd - 1;
+    return have_simd - 1;
 #endif
 }
 #elif defined(__ARM_NEON) || defined(__aarch64__) || defined(_M_ARM64)
