@@ -21,6 +21,7 @@ void main() {
         oscillatorQuality: 2,
         tuningFrequency: 442,
         stretchTuning: 0.5,
+        maxVoices: 24,
         scalaFile: 'asset:wide',
       );
       expect(preset.typeId, AudSfzSampler.typeId);
@@ -33,6 +34,7 @@ void main() {
         AudSfzSampler.oscillatorQuality: 2.0,
         AudSfzSampler.tuningFrequency: 442.0,
         AudSfzSampler.stretchTuning: 0.5,
+        AudSfzSampler.maxVoices: 24.0,
       });
       expect(preset.strings, {
         AudSfzSampler.sfzFile: 'asset:piano',
@@ -78,6 +80,7 @@ void main() {
         virtualPath: '/a.sfz',
         name: 'A',
         polyphony: 8,
+        maxVoices: 6,
       );
       expect(preset.validate(descriptor), isEmpty);
       final copy = AudNodePreset.fromJson(preset.toJson());

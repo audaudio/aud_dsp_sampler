@@ -36,6 +36,24 @@
 // copy or parse on the audio thread, is refused and reported as
 // AUD_ERROR_UNSUPPORTED, like the per-note messages of MIDI 2.0 except poly
 // pressure.
+//
+// The voices (ticket 29): in each block, after its events, a node
+// keeps its sounding voices - those that play and are neither turned off nor
+// stolen - below two limits and steals the rest with a linear fade of 10 ms,
+// which starts with the block; a stolen voice is free at the end of its fade
+// and starts no release trigger. New notes are never refused. The limits:
+// "max_voices" of the node, and one voice budget of the process that all
+// nodes of all graphs share. Each keeps a reserve of free voices below it,
+// so that a new note finds a free voice while a stolen one fades: below
+// max_voices 256 a node keeps at most max(1, max_voices - reserve) voices
+// sounding, and below a budget above 0 the nodes of the process keep at most
+// max(1, budget - reserve). Each node takes its share of the excess over
+// the budget: released voices first - key and pedal up -, shared out by the
+// released voices of each node, then held voices by the held voices of
+// each node; within a node it steals released voices before held ones, the
+// oldest first, all layers of a note together. Offline renders count no
+// voices and steal none for the budget; max_voices holds for them too.
+// sfizz's own polyphony limits stay as they are.
 
 #ifndef AUD_DSP_SAMPLER_H
 #define AUD_DSP_SAMPLER_H
@@ -72,8 +90,27 @@ enum {
   // "stretch_tuning": the piano stretch of sfizz, 0 to 1; a change loads the
   // instrument again.
   AUD_SFZ_PARAM_STRETCH_TUNING = 5,
-  AUD_SFZ_NUM_PARAMS = 6,
+  // "max_voices": the voices the node keeps sounding, 1 to 256, minus the
+  // reserve of the process (ticket 29); 256 sets no limit beyond the
+  // polyphony. It takes effect at the next block without a reload; above
+  // it the node steals voices with a fade of 10 ms.
+  AUD_SFZ_PARAM_MAX_VOICES = 6,
+  AUD_SFZ_NUM_PARAMS = 7,
 };
+
+// The voices of the sampler nodes of the process (ticket 29): what
+// aud_dsp_sampler_voice_stats reads. The counts are those the live nodes
+// published at the end of their last block; the counters only grow.
+typedef struct AudSfzVoiceStats {
+  uint32_t struct_size;
+  int32_t budget;         // voices; 0: no budget
+  int32_t reserve;        // free voices kept below each limit
+  int32_t sounding;       // voices that sound, over the live nodes
+  int32_t released;       // of them released: key and pedal up
+  uint32_t reserved;      // 0
+  uint64_t stolen;        // voices stolen by max_voices and the budget, in live blocks
+  uint64_t voice_frames;  // voices rendered times frames, of live blocks
+} AudSfzVoiceStats;
 
 // The string settings of the sampler node (AudNodeVTable.set_string). Each
 // one that loads returns the id of its load (> 0); a newer load cancels a
@@ -104,6 +141,27 @@ AUD_EXPORT int64_t aud_dsp_sampler_store_bytes(void);
 
 // [any thread] The sample files the store of the process keeps.
 AUD_EXPORT int32_t aud_dsp_sampler_store_files(void);
+
+// [any thread] Sets the voice budget of the process: the voices that all
+// sampler nodes of all graphs keep sounding together in live renders, minus
+// the reserve; 0, the default, sets none, and a negative budget counts as 0.
+// The nodes follow at the end of their next block.
+AUD_EXPORT void aud_dsp_sampler_set_voice_budget(int32_t voices);
+
+// [any thread] The voice budget of the process; 0: none.
+AUD_EXPORT int32_t aud_dsp_sampler_voice_budget(void);
+
+// [any thread] Sets the free voices the budget and every max_voices keep
+// below themselves, 0 to 16 (clamped); 4 by default.
+AUD_EXPORT void aud_dsp_sampler_set_voice_reserve(int32_t voices);
+
+// [any thread] The free voices the budget and every max_voices keep.
+AUD_EXPORT int32_t aud_dsp_sampler_voice_reserve(void);
+
+// [any thread] Reads the voices of the process into `out`, whose
+// struct_size the caller sets; AUD_OK, or AUD_ERROR_INVALID_ARGUMENT for NULL
+// or a struct_size below sizeof(AudSfzVoiceStats).
+AUD_EXPORT int32_t aud_dsp_sampler_voice_stats(AudSfzVoiceStats* out);
 
 // [control] Gives the sampler the assets of an Android app, an AAssetManager*:
 // a path "apk:/<path>" in sfz_file, scala_file or sfz_virtual_path, and

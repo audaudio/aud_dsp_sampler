@@ -42,6 +42,11 @@ const List<DefinitionWithStaticCalls> samplerMembers = [
   Method('registerWith', _sampler),
   Getter('storeBytes', _sampler),
   Getter('storeFiles', _sampler),
+  Getter('voiceBudget', _sampler),
+  Setter('voiceBudget', _sampler),
+  Getter('voiceReserve', _sampler),
+  Setter('voiceReserve', _sampler),
+  Getter('voiceStats', _sampler),
 ];
 
 /// Whether an app with the recorded [uses] needs the native library.

@@ -7,7 +7,8 @@
 // Tests the synth of the sfizz fork (src/sfizz/Synth.cpp) without the node:
 // what a load keeps of the errors of its parser, how it drops the regions
 // whose samples it cannot read, and that an instrument without regions
-// loads (ticket 27).
+// loads (ticket 27); that its own polyphony leaves out the voices a voice
+// limit of the host stole (ticket 29).
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,7 @@
 #include "Region.h"
 #include "RegionSet.h"
 #include "Synth.h"
+#include "Voice.h"
 
 #include "aud_test.hpp"
 
@@ -99,4 +101,31 @@ AUD_TEST(sfizz_synth_drops_a_region_from_every_list_that_points_at_it) {
   }
   synth.noteOn(0, 61, 100);
   AUD_CHECK(synth.getNumActiveVoices() == 1);
+}
+
+// ############################################################################
+// Voices a host steals (ticket 29)
+
+AUD_TEST(sfizz_synth_polyphony_holds_beside_stolen_voices) {
+  // A polyphony of two voices. A stolen voice frees its place at once: the
+  // next note turns nothing off. The note after it exceeds the polyphony
+  // and turns the oldest sounding voice off, as before; the stolen voice
+  // is not taken for it.
+  sfz::Synth synth;
+  synth.setSamplesPerBlock(256);
+  synth.setNumVoices(2);
+  AUD_CHECK(synth.loadSfzString("/aud_dsp_sampler/sines.sfz",
+                                "<region> sample=*sine ampeg_release=2\n"));
+  synth.noteOn(0, 60, 100);
+  synth.noteOn(0, 62, 100);
+  AUD_CHECK(synth.stealVoices(1, 480).sounding == 1);
+  synth.noteOn(0, 64, 100);
+  AUD_CHECK(synth.countVoices().sounding == 2);
+  AUD_CHECK(synth.countVoices().rendered == 3);
+  synth.noteOn(0, 66, 100);
+  AUD_CHECK(synth.countVoices().sounding == 2);
+  AUD_CHECK(synth.countVoices().rendered == 4);
+  int stolen = 0;
+  for (const sfz::Voice* voice : synth.getActiveVoices()) stolen += voice->isStolen() ? 1 : 0;
+  AUD_CHECK(stolen == 1);
 }

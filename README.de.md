@@ -19,6 +19,10 @@ Teil der Audanika Audio Engine; geplant in [aud_audio_pm](https://github.com/aud
   einer Überblendung von 5 ms übernimmt (sampler-003)
 - Ein Sample-Speicher pro Prozess im Sample-Cache-Budget der Engine
   (lifecycle-002)
+- Kräftiges Spielen überlastet den Audio-Thread nicht: ein Stimmenlimit
+  pro Knoten, das sich in Echtzeit ändert, und ein Stimmenbudget für alle
+  Knoten des Prozesses, gehalten durch das Stehlen von Stimmen mit einer
+  Ausblendung von 10 ms (sampler-008)
 - Auf dem Audio-Thread wird nichts alloziert (interop-001); die nativen
   Tests lassen den Knoten unter dem Watchdog der Engine, dem
   RealtimeSanitizer und dem ThreadSanitizer laufen
@@ -52,6 +56,8 @@ entfällt ohne eines.
 
 - [Der Plan von Ticket 25](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-11-25-build-the-sfz-sampler-on-sfizz-for-ios-and-android.md)
   mit dem Knoten, seinen Messungen und Erkenntnissen
+- [Der Plan von Ticket 29](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-29-limit-the-voices-by-the-cpu-power-of-the-device.md)
+  mit dem Stimmenlimit, dem Stimmenbudget und dem Stehlen
 - Die Entscheidungen hinter dem Paket:
   - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
     sfizz, geforkt, als Kern des Samplers
@@ -61,6 +67,8 @@ entfällt ohne eines.
     Ladevorgänge in einen Standby-Synth, mit einer Überblendung getauscht
   - [lifecycle-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/lifecycle-002.md):
     die Ressourcen des Prozesses und das Sample-Cache-Budget
+  - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
+    das Stimmenlimit pro Knoten und das Stimmenbudget des Prozesses
   - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
     Nachrichten an Knoten und ihre Antworten
   - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):
@@ -108,6 +116,13 @@ Future<void> main() async {
   graph.messages.listen((m) => print('${m.path} ${m.arguments}'));
   graph.sendMessage(piano, AudOscMessage('/num_regions'));
   print('${AudDspSampler.storeFiles} files, ${AudDspSampler.storeBytes} bytes');
+
+  // At most 24 voices for the piano, and 48 for all samplers of the
+  // process, each minus a reserve of 4 free voices.
+  graph.setParam(piano, AudSfzSampler.maxVoices, 24);
+  AudDspSampler.voiceBudget = 48;
+  final voices = AudDspSampler.voiceStats;
+  print('${voices.sounding} voices sound, ${voices.stolen} were stolen');
 }
 ```
 
@@ -228,14 +243,57 @@ graph.setString(
 - Die Parameter, in der Reihenfolge von `AudSfzSampler.params`: `volume`
   (dB, -60 bis +6, mit Rampe), `polyphony` (1 bis 256), `sample_quality`
   (0 bis 10), `oscillator_quality` (0 bis 3), `tuning_frequency` (400 bis
-  480 Hz) und `stretch_tuning` (0 bis 1). Die gestuften runden auf ihre
-  Stufe. Eine Änderung der Polyphonie oder der Stimmung lädt das
-  Instrument neu, und die klingenden Noten blenden aus.
+  480 Hz), `stretch_tuning` (0 bis 1) und `max_voices` (1 bis 256, siehe
+  Stimmen). Die gestuften runden auf ihre Stufe. Eine Änderung der
+  Polyphonie oder der Stimmung lädt das Instrument neu, und die klingenden
+  Noten blenden aus; `max_voices` wirkt ab dem nächsten Block ohne
+  Ladevorgang.
 - Der Tail des Knotens ist das längste Amplituden-Release seines
   Instruments, der ADSR oder des Flex-EG, der sie ersetzt (`egN_ampeg`).
   Der Transport erreicht sfizz - Tempo, Taktart, Position und
   Wiedergabezustand - für seine tempo-synchrone Modulation. Ein
   Offline-Render lässt sfizz in seiner besten Qualität rechnen.
+
+### Stimmen
+
+- In jedem Block, nach seinen Events und bevor er rendert, zählt ein
+  Knoten seine klingenden Stimmen - sie spielen und sind weder abgeschaltet
+  noch gestohlen - über den spielenden und den ausblendenden Synth, aus der
+  Liste der aktiven Stimmen von sfizz. Über seinen Limits stiehlt er den
+  Überschuss: losgelassene Stimmen (Taste und Pedal oben) vor gehaltenen,
+  die ältesten zuerst, alle Layer einer Note zusammen. Eine gestohlene
+  Stimme blendet ab dem Anfang des Blocks über 10 ms linear aus, überhört
+  Note-Offs und die Pedale, startet keinen Release-Trigger und ist am Ende
+  ihrer Ausblendung frei, ohne den Ausklang von 50 ms von sfizz. Neue Noten
+  werden nie abgewiesen: Der Überschuss geht am Ende des Blocks, der sie
+  startete.
+- `max_voices` (1 bis 256, Standard 256) begrenzt einen Knoten in Echtzeit:
+  Unter 256 hält er höchstens `max(1, max_voices - reserve)` Stimmen
+  klingend; 256 setzt kein Limit über die Polyphonie hinaus. Es gilt auch
+  für Offline-Renders.
+- Ein Stimmenbudget pro Prozess (`AudDspSampler.voiceBudget`, Standard 0:
+  keines) gilt für die Live-Renders aller Knoten aller Graphen: Zusammen
+  halten sie höchstens `max(1, budget - reserve)` Stimmen klingend. Die
+  Knoten veröffentlichen ihre klingenden und losgelassenen Stimmen in
+  Atomics des Prozesses, und jeder nimmt seinen Anteil am Überschuss:
+  zuerst losgelassene Stimmen, aufgeteilt nach den losgelassenen Stimmen
+  jedes Knotens, dann gehaltene nach den gehaltenen Stimmen jedes Knotens;
+  ein Knoten, dessen Anteil auf 0 abrundet, aber mindestens dem
+  Durchschnitt der Knoten mit Stimmen entspricht, nimmt eine, damit der
+  Überschuss mit jedem Block schrumpft. Offline-Renders zählen keine
+  Stimmen und stehlen keine für das Budget. Ein Knoten zieht seine
+  Stimmen zurück, wenn er geht, wenn der Graph stoppt oder ihn
+  zurücksetzt, und solange er offline oder ohne Ausgang rendert.
+- Die Reserve (`AudDspSampler.voiceReserve`, 0 bis 16, Standard 4) hält
+  unter beiden Limits Stimmen frei, damit eine neue Note sofort eine freie
+  Stimme findet, während eine gestohlene ausblendet.
+- `AudDspSampler.voiceStats` liest das Budget, die Reserve, die Stimmen,
+  die die Live-Knoten am Ende ihres letzten Blocks klingen ließen und
+  losgelassen hatten, und zwei Zähler, die nur wachsen: die Stimmen, die
+  `max_voices` und das Budget in Live-Blöcken stahlen, und die gerenderten
+  Stimmen mal die
+  Frames ihrer Live-Blöcke. Die eigenen Polyphonie-Limits von sfizz und
+  ihre Ausblendungen von 6 ms bleiben, wie sie sind.
 
 ### Ladevorgänge
 
@@ -331,6 +389,16 @@ graph.setString(
   stb_vorbis und die CPU-Fähigkeiten von dr_flac und dr_mp3 - wird einmal
   gebaut, ist atomar oder wird von einem Mutex geschützt, den nur
   Ladevorgänge nehmen; `NOTICES.md` listet die Prüfung (Ticket 28).
+- Ein Host hält die Stimmen eines Synths unter einem eigenen Limit,
+  während der Synth rendert (Ticket 29): `Synth::countVoices()` zählt die
+  klingenden, losgelassenen und gerenderten Stimmen aus der Liste der
+  aktiven Stimmen, `Synth::stealVoices()` stiehlt sie in der Reihenfolge
+  oben, und `Voice::steal()` blendet eine Stimme linear aus und gibt sie
+  am Ende frei. Die Polyphonie-Prüfungen von sfizz überspringen gestohlene
+  Stimmen wie Stimmen, die es abgeschaltet hat, und sind sonst
+  unverändert; eine gestohlene Stimme lässt keinen Release-Trigger
+  starten. `VoiceCount.h` ist neu; `NOTICES.md` listet die geänderten
+  Dateien.
 - Die Hot Spots des Audio-Threads einer App sind schneller, mit Bit für Bit
   derselben Ausgabe (Ticket 28): Der MIDI-Zustand leert nur die
   Event-Vektoren, die Events bekamen; der Kompressor ruft `log10` und `pow`
@@ -350,12 +418,16 @@ graph.setString(
 
 - `aud_dsp_sampler.dart` ist plattformneutral und kompiliert für das Web:
   `AudSfzSampler` hält die IDs des Knotens, `AudSfzPreset.file` und
-  `AudSfzPreset.text` bauen seine Presets.
+  `AudSfzPreset.text` bauen seine Presets, `AudSfzVoiceStats` hält die
+  Stimmen des Prozesses.
 - `aud_dsp_sampler_ffi.dart` ergänzt `AudDspSampler`: `register` ist die
   Registrierungsfunktion für die Paketliste einer Engine, `registerWith`
   registriert bei der Host-API eines Graphen und wirft eine
   `AudDspSamplerException` mit dem Ergebniscode, wenn die Engine ablehnt,
-  `storeBytes` und `storeFiles` lesen den Speicher des Prozesses.
+  `storeBytes` und `storeFiles` lesen den Speicher des Prozesses,
+  `voiceBudget` und `voiceReserve` setzen das Stimmenbudget des Prozesses
+  und seine Reserve auf jedem Thread, und `voiceStats` liest seine
+  Stimmen.
 - Das Paket ist ein Android-Plugin ohne Flutter-Abhängigkeit: Flutter baut
   den Java-Shim in `android/`, einen Content-Provider, der den
   `AssetManager` der App an die native Bibliothek übergibt, wenn der
@@ -389,6 +461,13 @@ node scripts/test-native.js
   auf lauten, leisen, stillen, transienten und einseitigen Signalen, und den
   Render eines Instruments wie dem einer App mit
   `test/goldens/sfizz_app_instrument.wav`, den Release 0.3.0 renderte.
+- Die Tests von Ticket 29 prüfen, dass `max_voices` ab dem nächsten Block
+  ohne Ladevorgang wirkt, dass eine gestohlene Stimme ohne Sprung
+  ausblendet und nach 10 ms frei ist, die Reihenfolge des Stehlens und die
+  Layer, die zusammen gehen, das Budget über die Knoten eines Graphen und
+  über Graphen - auch während zwei Threads rendern und ein dritter das
+  Budget setzt -, die Reserve, Offline-Renders, und dass ein Knoten, der
+  geht, keine Stimmen in den Zählern hinterlässt.
 - `--bench` baut den Mikro-Benchmark `test/native/bench/sfizz_bench.cpp`
   mit -O3 mit dem Fork von Release 0.3.0 (`AUD_BENCH_BASE` nennt eine
   andere Git-Ref) und mit dem Fork von jetzt, gibt aus, was das Leeren des

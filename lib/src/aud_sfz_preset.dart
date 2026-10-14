@@ -35,6 +35,8 @@ abstract final class AudSfzPreset {
   ///   ([AudSfzSampler.tuningFrequency])
   /// - [stretchTuning] the piano stretch, 0 to 1
   ///   ([AudSfzSampler.stretchTuning])
+  /// - [maxVoices] the voices the node keeps sounding, 1 to 256, minus the
+  ///   voice reserve of the process ([AudSfzSampler.maxVoices])
   /// - [scalaFile] a Scala tuning file that loads with the instrument: a
   ///   path, or `asset:<id>`
   /// - [scalaText] a Scala tuning given as text, instead of [scalaFile]
@@ -47,6 +49,7 @@ abstract final class AudSfzPreset {
     int? oscillatorQuality,
     double? tuningFrequency,
     double? stretchTuning,
+    int? maxVoices,
     String? scalaFile,
     String? scalaText,
   }) => _preset(
@@ -58,6 +61,7 @@ abstract final class AudSfzPreset {
     oscillatorQuality: oscillatorQuality,
     tuningFrequency: tuningFrequency,
     stretchTuning: stretchTuning,
+    maxVoices: maxVoices,
     scalaFile: scalaFile,
     scalaText: scalaText,
   );
@@ -80,6 +84,8 @@ abstract final class AudSfzPreset {
   ///   ([AudSfzSampler.tuningFrequency])
   /// - [stretchTuning] the piano stretch, 0 to 1
   ///   ([AudSfzSampler.stretchTuning])
+  /// - [maxVoices] the voices the node keeps sounding, 1 to 256, minus the
+  ///   voice reserve of the process ([AudSfzSampler.maxVoices])
   /// - [scalaFile] a Scala tuning file that loads with the instrument: a
   ///   path, or `asset:<id>`
   /// - [scalaText] a Scala tuning given as text, instead of [scalaFile]
@@ -93,6 +99,7 @@ abstract final class AudSfzPreset {
     int? oscillatorQuality,
     double? tuningFrequency,
     double? stretchTuning,
+    int? maxVoices,
     String? scalaFile,
     String? scalaText,
   }) => _preset(
@@ -107,6 +114,7 @@ abstract final class AudSfzPreset {
     oscillatorQuality: oscillatorQuality,
     tuningFrequency: tuningFrequency,
     stretchTuning: stretchTuning,
+    maxVoices: maxVoices,
     scalaFile: scalaFile,
     scalaText: scalaText,
   );
@@ -121,6 +129,7 @@ abstract final class AudSfzPreset {
     required int? oscillatorQuality,
     required double? tuningFrequency,
     required double? stretchTuning,
+    required int? maxVoices,
     required String? scalaFile,
     required String? scalaText,
   }) {
@@ -138,6 +147,7 @@ abstract final class AudSfzPreset {
         AudSfzSampler.oscillatorQuality: ?oscillatorQuality?.toDouble(),
         AudSfzSampler.tuningFrequency: ?tuningFrequency,
         AudSfzSampler.stretchTuning: ?stretchTuning,
+        AudSfzSampler.maxVoices: ?maxVoices?.toDouble(),
       },
       strings: {
         ...strings,

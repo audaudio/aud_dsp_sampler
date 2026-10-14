@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 29 of aud_audio_pm):
+// countVoices() and stealVoices() serve a voice limit of the host from the
+// list of active voices; a stolen voice is no attack voice that lets a
+// release trigger start. The polyphony checks are as they were.
+
 #include "VoiceManager.h"
 #include "SisterVoiceRing.h"
 #include "RegionSet.h"
@@ -71,6 +76,7 @@ bool VoiceManager::playingAttackVoice(const Region* releaseRegion) noexcept
         const TriggerEvent& event = v.getTriggerEvent();
         return (
             !v.isFree()
+            && !v.isStolen()
             && event.type == TriggerEventType::NoteOn
             && releaseRegion->keyRange.containsWithEnd(event.number)
             && releaseRegion->velocityRange.containsWithEnd(event.value)
@@ -142,6 +148,65 @@ void VoiceManager::setStealingAlgorithm(StealingAlgorithm algorithm)
         stealer_ = absl::make_unique<EnvelopeAndAgeStealer>();
         break;
     }
+}
+
+VoiceCount VoiceManager::countVoices() const noexcept
+{
+    VoiceCount count;
+    count.rendered = static_cast<int>(activeVoices_.size());
+    for (const Voice* voice : activeVoices_) {
+        if (voice->offedOrFree())
+            continue;
+        count.sounding += 1;
+        if (voice->released())
+            count.released += 1;
+    }
+    return count;
+}
+
+VoiceCount VoiceManager::stealVoices(int count, int fadeFrames) noexcept
+{
+    VoiceCount stolen;
+    if (count <= 0)
+        return stolen;
+
+    // temp_ holds as many voices as the list, so it does not allocate; only
+    // the polyphony checks of a note use it otherwise.
+    temp_.clear();
+    for (Voice* voice : activeVoices_) {
+        if (!voice->offedOrFree())
+            temp_.push_back(voice);
+    }
+
+    // Released voices first, then the oldest; equal ages by their start.
+    absl::c_sort(temp_, [](const Voice* lhs, const Voice* rhs) {
+        const bool lhsReleased = lhs->released();
+        if (lhsReleased != rhs->released())
+            return lhsReleased;
+        if (lhs->getAge() != rhs->getAge())
+            return lhs->getAge() > rhs->getAge();
+        if (lhs->getStartTimestampSamples() != rhs->getStartTimestampSamples())
+            return lhs->getStartTimestampSamples() < rhs->getStartTimestampSamples();
+        return lhs->getId().number() < rhs->getId().number();
+    });
+
+    for (Voice* voice : temp_) {
+        if (stolen.sounding >= count)
+            break;
+        // A sister of a voice stolen before.
+        if (voice->isStolen())
+            continue;
+        SisterVoiceRing::applyToRing(voice, [&](Voice* sister) {
+            if (!sister->offedOrFree()) {
+                stolen.sounding += 1;
+                if (sister->released())
+                    stolen.released += 1;
+            }
+            sister->steal(fadeFrames);
+        });
+    }
+    temp_.clear();
+    return stolen;
 }
 
 void VoiceManager::checkPolyphony(const Region* region, int delay, const TriggerEvent& triggerEvent) noexcept

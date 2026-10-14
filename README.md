@@ -18,6 +18,9 @@ Part of the Audanika Audio Engine; planned in [aud_audio_pm](https://github.com/
   with a crossfade of 5 ms (sampler-003)
 - One sample store per process within the sample cache budget of the
   engine (lifecycle-002)
+- Playing hard does not overload the audio thread: a voice limit per node
+  that changes in real time and one voice budget for all nodes of the
+  process, kept by stealing voices with a fade of 10 ms (sampler-008)
 - Nothing allocates on the audio thread (interop-001); the native tests
   run the node under the engine's watchdog, the RealtimeSanitizer and the
   ThreadSanitizer
@@ -51,6 +54,8 @@ one.
 
 - [The plan of ticket 25](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-11-25-build-the-sfz-sampler-on-sfizz-for-ios-and-android.md)
   with the node, its measurements and findings
+- [The plan of ticket 29](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-29-limit-the-voices-by-the-cpu-power-of-the-device.md)
+  with the voice limit, the voice budget and the stealing
 - The decisions behind the package:
   - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
     sfizz, forked, as the core of the sampler
@@ -60,6 +65,8 @@ one.
     loads into a standby synth, swapped in with a crossfade
   - [lifecycle-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/lifecycle-002.md):
     the resources of the process and the sample cache budget
+  - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
+    the voice limit per node and the voice budget of the process
   - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
     messages to nodes and their answers
   - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):
@@ -107,6 +114,13 @@ Future<void> main() async {
   graph.messages.listen((m) => print('${m.path} ${m.arguments}'));
   graph.sendMessage(piano, AudOscMessage('/num_regions'));
   print('${AudDspSampler.storeFiles} files, ${AudDspSampler.storeBytes} bytes');
+
+  // At most 24 voices for the piano, and 48 for all samplers of the
+  // process, each minus a reserve of 4 free voices.
+  graph.setParam(piano, AudSfzSampler.maxVoices, 24);
+  AudDspSampler.voiceBudget = 48;
+  final voices = AudDspSampler.voiceStats;
+  print('${voices.sounding} voices sound, ${voices.stolen} were stolen');
 }
 ```
 
@@ -224,15 +238,52 @@ graph.setString(
   message API.
 - The parameters, in the order of `AudSfzSampler.params`: `volume` (dB,
   -60 to +6, ramped), `polyphony` (1 to 256), `sample_quality` (0 to 10),
-  `oscillator_quality` (0 to 3), `tuning_frequency` (400 to 480 Hz) and
-  `stretch_tuning` (0 to 1). The stepped ones round to their step. A
-  change of the polyphony or the tuning loads the instrument again, and
-  the notes that sound fade out.
+  `oscillator_quality` (0 to 3), `tuning_frequency` (400 to 480 Hz),
+  `stretch_tuning` (0 to 1) and `max_voices` (1 to 256, see Voices). The
+  stepped ones round to their step. A change of the polyphony or the
+  tuning loads the instrument again, and the notes that sound fade out;
+  `max_voices` takes effect at the next block without a load.
 - The tail of the node is the longest amplitude release of its
   instrument, of the ADSR or of the flex EG that replaces it
   (`egN_ampeg`). The transport reaches sfizz - tempo, time signature,
   position and playing state - for its tempo-synced modulation. An
   offline render runs sfizz at its best quality.
+
+### Voices
+
+- In each block, after its events and before it renders, a
+  node counts its voices that sound - they play and are neither turned off
+  nor stolen - over the synth that plays and the one that fades out, from
+  sfizz's list of active voices. Above its limits it steals the excess:
+  released voices (key and pedal up) before held ones, the oldest first,
+  all layers of a note together. A stolen voice fades out linearly over
+  10 ms from the start of the block, ignores note-offs and the pedals,
+  starts no release trigger and is free at the end of its fade, without
+  sfizz's tail of 50 ms. New notes are never refused: the excess goes at
+  the end of the block that started them.
+- `max_voices` (1 to 256, default 256) limits a node in real time: below
+  256 it keeps at most `max(1, max_voices - reserve)` voices sounding; 256
+  sets no limit beyond the polyphony. It holds for offline renders too.
+- One voice budget per process (`AudDspSampler.voiceBudget`, 0 by default:
+  none) holds for the live renders of all nodes of all graphs: together
+  they keep at most `max(1, budget - reserve)` voices sounding. The nodes
+  publish their sounding and released voices to atomics of the process,
+  and each takes its share of the excess: released voices first, shared
+  out by the released voices of each node, then held voices by the held
+  voices of each node; a node whose share rounds to 0 but is at least the
+  average of the nodes with voices takes one, so that the excess shrinks
+  with every block. Offline renders count no voices and steal none for the
+  budget. A node withdraws its voices when it goes, when the graph stops or
+  resets it, and while it renders offline or without an output.
+- The reserve (`AudDspSampler.voiceReserve`, 0 to 16, default 4) keeps free
+  voices below both limits, so that a new note finds a free voice at once
+  while a stolen one fades.
+- `AudDspSampler.voiceStats` reads the budget, the reserve, the voices the
+  live nodes sound and released at the end of their last block, and two
+  counters that only grow: the voices that `max_voices` and the budget
+  stole in live blocks, and the voices rendered times the frames of their
+  live blocks.
+  sfizz's own polyphony limits and their 6 ms fades stay as they are.
 
 ### Loads
 
@@ -318,6 +369,14 @@ graph.setString(
   table of stb_vorbis and the CPU caps of dr_flac and dr_mp3 - is built
   once, atomic or guarded by a mutex that only loads take; `NOTICES.md`
   lists the audit (ticket 28).
+- A host keeps the voices of a synth below a limit of its own while the
+  synth renders (ticket 29): `Synth::countVoices()` counts the voices that
+  sound, are released and render from the list of active voices,
+  `Synth::stealVoices()` steals them in the order above, and
+  `Voice::steal()` fades a voice out linearly and frees it at the end.
+  The polyphony checks of sfizz skip stolen voices like voices it turned
+  off and are unchanged otherwise; a stolen voice lets no release trigger
+  start. `VoiceCount.h` is new; `NOTICES.md` lists the changed files.
 - The hot spots of an app's audio thread are faster, with the same output
   bit for bit (ticket 28): the MIDI state flushes only the event vectors
   that received events; the compressor calls `log10` and `pow` only above
@@ -335,12 +394,15 @@ graph.setString(
 
 - `aud_dsp_sampler.dart` is platform-neutral and compiles for the web:
   `AudSfzSampler` holds the ids of the node, `AudSfzPreset.file` and
-  `AudSfzPreset.text` build its presets.
+  `AudSfzPreset.text` build its presets, `AudSfzVoiceStats` holds the
+  voices of the process.
 - `aud_dsp_sampler_ffi.dart` adds `AudDspSampler`: `register` is the
   register function for the package list of an engine, `registerWith`
   registers with the host api of a graph and throws an
   `AudDspSamplerException` with the result code when the engine refuses,
-  `storeBytes` and `storeFiles` read the store of the process.
+  `storeBytes` and `storeFiles` read the store of the process,
+  `voiceBudget` and `voiceReserve` set the voice budget of the process and
+  its reserve on any thread, and `voiceStats` reads its voices.
 - The package is an Android plugin without a Flutter dependency: Flutter
   builds the Java shim in `android/`, a content provider that hands the
   `AssetManager` of the app to the native library when the process starts.
@@ -371,6 +433,13 @@ node scripts/test-native.js
   transient and one-sided signals, and the render of an instrument like an
   app's with `test/goldens/sfizz_app_instrument.wav`, which release 0.3.0
   rendered.
+- The tests of ticket 29 check that `max_voices` takes effect at the next
+  block without a load, that a stolen voice fades without a step and is
+  free after 10 ms, the order of the steals and the layers that go
+  together, the budget across the nodes of a graph and across graphs -
+  also while two threads render and a third sets the budget -, the
+  reserve, offline renders, and that a node that goes leaves no voices in
+  the counts.
 - `--bench` builds the micro-benchmark `test/native/bench/sfizz_bench.cpp`
   at -O3 with the fork of release 0.3.0 (`AUD_BENCH_BASE` names another
   git ref) and with the fork of now, prints what the flush of the MIDI

@@ -643,6 +643,10 @@ void applyParam(Node& node, uint32_t index, float value, uint32_t rampFrames) {
     case AUD_SFZ_PARAM_STRETCH_TUNING:
       reloadIfChanged(node, shared.stretchTuning, value);
       return;
+    case AUD_SFZ_PARAM_MAX_VOICES:
+      // limitVoices reads it at the end of the block, over both synths: no
+      // synth and no load takes it.
+      return;
     case AUD_SFZ_PARAM_SAMPLE_QUALITY:
       shared.sampleQuality.store(stepOf(value), std::memory_order_release);
       break;
@@ -994,6 +998,71 @@ void sendTransport(Node& node, sfz::Synth& synth, const AudTransportSnapshot* tr
   }
 }
 
+// ............................................................................
+// The voice limit and the budget of the process (ticket 29)
+
+// The voices of the node: of the synth that plays and of the one that fades
+// out.
+sfz::VoiceCount countVoices(const Node& node) {
+  sfz::VoiceCount total;
+  const sfz::Synth* synths[2] = {node.fading, node.active};
+  for (const sfz::Synth* synth : synths) {
+    if (synth == nullptr) continue;
+    const sfz::VoiceCount count = synth->countVoices();
+    total.sounding += count.sounding;
+    total.released += count.released;
+    total.rendered += count.rendered;
+  }
+  return total;
+}
+
+// Steals `count` voices, those of the synth that fades out first - they end
+// with its 5 ms anyway -, and returns the sounding and the released ones it
+// stole.
+sfz::VoiceCount stealVoices(Node& node, int32_t count) {
+  sfz::VoiceCount stolen;
+  sfz::Synth* synths[2] = {node.fading, node.active};
+  for (sfz::Synth* synth : synths) {
+    if (synth == nullptr || stolen.sounding >= count) continue;
+    const sfz::VoiceCount taken =
+        synth->stealVoices(count - stolen.sounding, static_cast<int>(node.stealFrames));
+    stolen.sounding += taken.sounding;
+    stolen.released += taken.released;
+  }
+  return stolen;
+}
+
+// The voices the node steals: those beyond max_voices and, in a live render,
+// its share of the excess over the budget of the process.
+int32_t stealCountOf(const Node& node, const VoiceTally& own, const VoiceBudget& budget) {
+  const VoiceProcess process = budget.processFor(node.published);
+  const int32_t maxVoices = stepOf(node.params[AUD_SFZ_PARAM_MAX_VOICES]);
+  int32_t count = limitExcess(own, maxVoices, process.reserve);
+  if (!node.freewheeling) count = std::max(count, budgetShare(own, process));
+  return std::min(count, own.sounding);
+}
+
+// Keeps the voices below max_voices and the budget after the events of the
+// block, so that the fades of the stolen voices start with it, and publishes
+// what sounds then. An offline render publishes and counts nothing.
+void limitVoices(Node& node, uint32_t frames) {
+  VoiceBudget& budget = VoiceBudget::get();
+  const sfz::VoiceCount count = countVoices(node);
+  VoiceTally own;
+  own.sounding = count.sounding;
+  own.released = count.released;
+  const int32_t steal = stealCountOf(node, own, budget);
+  const sfz::VoiceCount stolen = steal > 0 ? stealVoices(node, steal) : sfz::VoiceCount();
+  own.sounding -= stolen.sounding;
+  own.released -= stolen.released;
+  if (node.freewheeling) {
+    budget.withdraw(node.published);
+    return;
+  }
+  budget.publish(node.published, own, static_cast<uint32_t>(stolen.sounding),
+                 static_cast<uint64_t>(count.rendered) * frames);
+}
+
 void clearBus(const AudAudioBus& bus, uint32_t frames) {
   for (uint32_t c = 0; c < bus.num_channels; ++c) {
     std::memset(bus.channels[c], 0, sizeof(float) * frames);
@@ -1161,6 +1230,8 @@ void destroy(void* instance) {
   }
   // A load that runs sees the end and keeps its synth to itself.
   shared.serial.fetch_add(1, std::memory_order_acq_rel);
+  // The voices of the node no longer count in the budget of the process.
+  VoiceBudget::get().withdraw(node->published);
   delete shared.ready.exchange(nullptr, std::memory_order_acq_rel);
   delete node->active;
   delete node->fading;
@@ -1204,6 +1275,8 @@ int32_t prepare(void* instance, const AudPrepareInfo* info) {
       1, static_cast<uint32_t>(std::lround(kCrossfadeSeconds * info->sample_rate)));
   // A fade that runs goes on at the new rate.
   node->fadeRemaining = std::min(node->fadeRemaining, node->fadeFrames);
+  node->stealFrames = std::max<uint32_t>(
+      1, static_cast<uint32_t>(std::lround(kStealSeconds * info->sample_rate)));
   // No block renders now: the synths take the format, the one a load
   // handed over included.
   sfz::Synth* synths[3] = {node->active, node->fading,
@@ -1224,6 +1297,8 @@ void reset(void* instance, uint32_t) {
   auto* node = static_cast<Node*>(instance);
   if (node->active != nullptr) node->active->allSoundOff();
   if (node->fading != nullptr) node->fading->allSoundOff();
+  // Its voices are gone; a stopped graph keeps none in the budget.
+  VoiceBudget::get().withdraw(node->published);
 }
 
 void setParam(void* instance, uint32_t index, float value) {
@@ -1236,7 +1311,12 @@ void process(void* instance, const AudProcessContext* context) {
   adoptReady(node);
   followFreewheeling(node, context);
   dispatchEvents(node, context);
-  if (context->num_output_buses == 0 || context->outputs == nullptr) return;
+  if (context->num_output_buses == 0 || context->outputs == nullptr) {
+    // Nothing renders: no voice of the node counts in the budget.
+    VoiceBudget::get().withdraw(node.published);
+    return;
+  }
+  limitVoices(node, context->frames);
   if (node.active == nullptr) {
     clearBus(context->outputs[0], context->frames);
   } else {

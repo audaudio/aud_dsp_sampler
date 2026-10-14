@@ -7,7 +7,8 @@
 // Tests the voices of the sfizz fork (src/sfizz/Voice.cpp) on a synth of
 // their own, without the node: a voice whose file the pool does not hold,
 // and the release of a voice by the sustain pedal, by a note-off and when it
-// is stolen, with the ADSR and with a flex EG for the amplitude (ticket 27).
+// is stolen, with the ADSR and with a flex EG for the amplitude (ticket 27);
+// a voice that a voice limit of the host steals (ticket 29).
 //
 // The pool of the synth reports its bytes to nobody. A test first lets the
 // engine trim what the store holds for it, so that the store then holds only
@@ -244,4 +245,86 @@ AUD_TEST(sfizz_voice_turned_off_with_an_empty_flex_eg_ends_cleanly) {
       AUD_CHECK(peak(played.left, 0, played.left.size()) == 0.0f);
     }
   }
+}
+
+// ############################################################################
+// A voice that a voice limit steals (ticket 29)
+
+namespace {
+
+// The frames of the fade of a stolen voice: 10 ms.
+constexpr int kStealFrames = 480;
+
+// Note 60 from the first block on; at the start of kEventBlock the voice is
+// stolen, and `then` adds events to that block.
+Played stealAtEvent(const std::string& opcodes,
+                    const std::function<void(sfz::Synth&)>& then = nullptr, bool pedal = false) {
+  return play(opcodes, kEventBlock + 8, [&](sfz::Synth& synth, int block) {
+    if (block == 0) {
+      if (pedal) synth.cc(0, 64, 127);
+      synth.noteOn(0, 60, 127);
+    }
+    if (block != kEventBlock) return;
+    const sfz::VoiceCount stolen = synth.stealVoices(1, kStealFrames);
+    AUD_CHECK(stolen.sounding == 1 && stolen.released == 0);
+    if (then) then(synth);
+  });
+}
+
+}  // namespace
+
+AUD_TEST(sfizz_voice_stolen_fades_out_linearly_and_ends) {
+  // The output of a held constant is the gain of the voice: from the start
+  // of the block it falls linearly to 0 over 480 frames, without the
+  // release of a second, with the ADSR and with a flex EG. The voice is
+  // free with the block that ends the fade.
+  for (const std::string& opcodes : {adsrOf(1.0), flexOf(1.0)}) {
+    const Played played = stealAtEvent(opcodes);
+    const long start = static_cast<long>(kEventBlock) * kBlock;
+    const float held = played.left[start - 1];
+    AUD_CHECK(held > 0.1f && played.left[start - 2] == held);
+    float difference = 0;
+    for (long i = 0; i < kStealFrames + kBlock; ++i) {
+      const long remaining = std::max(0L, kStealFrames - 1 - i);
+      const float expected = held * static_cast<float>(remaining) / kStealFrames;
+      difference = std::max(difference, std::fabs(played.left[start + i] - expected));
+    }
+    AUD_CHECK(difference < 1e-6f);
+    AUD_CHECK(played.voices[kEventBlock] == 1);
+    AUD_CHECK(played.voices[kEventBlock + 1] == 0);
+  }
+}
+
+AUD_TEST(sfizz_voice_stolen_ignores_note_offs_and_the_pedal) {
+  // A release of 1 ms would end the voice within the fade; a stolen voice
+  // keeps its fade whatever comes after: a note-off, or the pedal going up
+  // after a note-off it held.
+  const std::string opcodes = adsrOf(0.001);
+  const Played reference = stealAtEvent(opcodes);
+  const Played noteOff =
+      stealAtEvent(opcodes, [](sfz::Synth& synth) { synth.noteOff(kEventOffset, 60, 0); });
+  const Played pedal = stealAtEvent(
+      opcodes,
+      [](sfz::Synth& synth) {
+        synth.noteOff(kEventOffset, 60, 0);
+        synth.cc(kEventOffset + 1, 64, 0);
+      },
+      true);
+  AUD_CHECK(noteOff.left == reference.left);
+  AUD_CHECK(pedal.left == reference.left);
+  AUD_CHECK(noteOff.voices == reference.voices && pedal.voices == reference.voices);
+}
+
+AUD_TEST(sfizz_voice_stolen_once_counts_as_turned_off) {
+  // A stolen voice no longer sounds: a second steal finds nothing, and a
+  // fade of no frames ends the voice with its block.
+  const Played played = play(adsrOf(1.0), 4, [](sfz::Synth& synth, int block) {
+    if (block == 0) synth.noteOn(0, 60, 127);
+    if (block != 2) return;
+    AUD_CHECK(synth.stealVoices(1, 0).sounding == 1);
+    AUD_CHECK(synth.stealVoices(1, kStealFrames).sounding == 0);
+    AUD_CHECK(synth.countVoices().sounding == 0 && synth.countVoices().rendered == 1);
+  });
+  AUD_CHECK(played.voices == (std::vector<int>{1, 1, 0, 0}));
+  AUD_CHECK(peak(played.left, 2 * kBlock, played.left.size()) == 0.0f);
 }

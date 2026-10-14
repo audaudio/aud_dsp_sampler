@@ -53,6 +53,14 @@ abstract final class AudSfzSampler {
   /// instrument again.
   static const String stretchTuning = 'stretch_tuning';
 
+  /// The voices the node keeps sounding, 1 to 256, minus the voice reserve
+  /// of the process (`AudDspSampler.voiceReserve`, 4 by default); default
+  /// 256, which sets no limit beyond [polyphony]. A change takes effect at
+  /// the next block without a reload: above it the node steals voices with
+  /// a fade of 10 ms, released ones first, then the oldest, all layers of a
+  /// note together. New notes are never refused.
+  static const String maxVoices = 'max_voices';
+
   /// The parameter ids in the order of their indices.
   static const List<String> params = [
     volume,
@@ -61,6 +69,7 @@ abstract final class AudSfzSampler {
     oscillatorQuality,
     tuningFrequency,
     stretchTuning,
+    maxVoices,
   ];
 
   // ...........................................................................

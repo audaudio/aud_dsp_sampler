@@ -19,6 +19,20 @@ void main() {
       final descriptor = graph.nodeType(AudSfzSampler.typeId)!;
       expect(descriptor.version, AudSfzSampler.version);
       expect(descriptor.params.map((p) => p.id), AudSfzSampler.params);
+      // max_voices: real time and automatable, 1 to 256, no limit by default.
+      final maxVoices = descriptor.params.last;
+      expect(
+        (
+          maxVoices.min,
+          maxVoices.max,
+          maxVoices.defaultValue,
+          maxVoices.automatable,
+          maxVoices.stepped,
+          maxVoices.ramped,
+          maxVoices.steps,
+        ),
+        (1.0, 256.0, 256.0, true, true, false, 255),
+      );
       expect(descriptor.stringKeys.map((k) => k.id), AudSfzSampler.strings);
       expect(descriptor.stringKeys.map((k) => k.key), [0, 1, 2, 3, 4]);
       expect(descriptor.eventInputs.single.id, AudSfzSampler.midi);
@@ -42,6 +56,7 @@ void main() {
           AudSfzSampler.tuningFrequency:
               bindings.AUD_SFZ_PARAM_TUNING_FREQUENCY,
           AudSfzSampler.stretchTuning: bindings.AUD_SFZ_PARAM_STRETCH_TUNING,
+          AudSfzSampler.maxVoices: bindings.AUD_SFZ_PARAM_MAX_VOICES,
         },
       );
       expect(

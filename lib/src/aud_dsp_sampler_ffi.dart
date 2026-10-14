@@ -8,13 +8,16 @@ import 'dart:ffi';
 
 import 'package:aud_audio_core/aud_audio_core.dart';
 import 'package:aud_audio_core/aud_audio_core_bindings.dart' as core;
+import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
 
 import 'aud_dsp_sampler_bindings_generated.dart' as bindings;
+import 'aud_sfz_voice_stats.dart';
 
 // #############################################################################
 /// The native side of the package: the registration of the sampler with an
-/// engine and the numbers of its sample store.
+/// engine, the numbers of its sample store and the voice budget of the
+/// process.
 ///
 /// Every member is recorded (`@RecordUse`): in a profile or release build
 /// the link hook of the package keeps its native library - sfizz with the
@@ -55,6 +58,55 @@ abstract final class AudDspSampler {
   /// The sample files the store of the process keeps.
   @RecordUse()
   static int get storeFiles => bindings.aud_dsp_sampler_store_files();
+
+  // ...........................................................................
+  // The voices of the process (ticket 29)
+
+  /// The voice budget of the process: the voices that all sampler nodes of
+  /// all graphs keep sounding together in live renders, minus
+  /// [voiceReserve]; 0, the default, sets none.
+  @RecordUse()
+  static int get voiceBudget => bindings.aud_dsp_sampler_voice_budget();
+
+  /// Sets the voice budget of the process; a negative budget counts as 0,
+  /// which sets none. The nodes follow at the end of their next block and
+  /// steal the voices above it with a fade of 10 ms: released voices first,
+  /// then the oldest.
+  @RecordUse()
+  static set voiceBudget(int voices) =>
+      bindings.aud_dsp_sampler_set_voice_budget(voices);
+
+  /// The free voices kept below the voice budget and below the
+  /// `max_voices` of every node, so that a new note finds a free voice
+  /// while a stolen one fades; 4 by default.
+  @RecordUse()
+  static int get voiceReserve => bindings.aud_dsp_sampler_voice_reserve();
+
+  /// Sets the free voices kept below the voice budget and every
+  /// `max_voices`, clamped to 0 to 16.
+  @RecordUse()
+  static set voiceReserve(int voices) =>
+      bindings.aud_dsp_sampler_set_voice_reserve(voices);
+
+  /// The voices of the process: the budget, the reserve, the voices the
+  /// live nodes sound and the counters of the voices stolen and rendered.
+  @RecordUse()
+  static AudSfzVoiceStats get voiceStats => using((arena) {
+    final stats = arena<bindings.AudSfzVoiceStats>();
+    stats.ref.struct_size = sizeOf<bindings.AudSfzVoiceStats>();
+    final result = bindings.aud_dsp_sampler_voice_stats(stats);
+    // Fails only for NULL or a short struct, which this call never passes.
+    assert(result == AUD_OK, AudAbi.resultName(result));
+    final ref = stats.ref;
+    return AudSfzVoiceStats(
+      budget: ref.budget,
+      reserve: ref.reserve,
+      sounding: ref.sounding,
+      released: ref.released,
+      stolen: ref.stolen,
+      voiceFrames: ref.voice_frames,
+    );
+  });
 }
 
 // #############################################################################

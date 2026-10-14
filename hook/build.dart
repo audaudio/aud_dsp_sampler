@@ -33,6 +33,7 @@ void main(List<String> args) async {
         'src/$packageName.cpp',
         'src/aud_apk_assets.cpp',
         'src/aud_sfz_node.cpp',
+        'src/aud_sfz_voice_budget.cpp',
         ...await listOf(input.packageRoot, '$sfizz/SOURCES.txt', sfizz),
       ],
       includes: [
