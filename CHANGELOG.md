@@ -7,15 +7,28 @@
 - Add a real-time voice limit and one voice budget per process
 
 - max_voices (1 to 256, default 256) takes effect at the next block without a reload
+
 - One voice budget for the live renders of all sampler nodes of the process, with a reserve of free voices (4 by default)
+
 - The excess goes at the end of each block: released voices first, the oldest first, all layers of a note together, with a linear fade of 10 ms
+
 - The excess over the budget is shared out by the released, then the held voices of each node
+
 - C API aud_dsp_sampler_set_voice_budget, _voice_budget, _set_voice_reserve, _voice_reserve and _voice_stats with AudSfzVoiceStats
+
 - AudDspSampler.voiceBudget, voiceReserve and voiceStats, AudSfzVoiceStats, AudSfzSampler.maxVoices and the preset argument maxVoices
+
 - Voice::steal, countVoices and stealVoices of VoiceManager and Synth, and VoiceCount.h in the sfizz fork
+
 - Native tests of the limit, the fade, the steal order and the budget across nodes, graphs and threads; Dart tests
+
 - aud_midi_standard from pub.dev, as aud_audio_graph and aud_audio_core take it
+
 - The voices in the READMEs, the C header, NOTICES.md and index.jsonc
+
+- Add the withdrawal of the voices of a node that renders no output
+
+- A node processed without an output bus no longer keeps its last voices in the budget of the process
 
 ## 0.3.1 - 2026-10-14
 

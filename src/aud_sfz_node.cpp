@@ -1311,7 +1311,11 @@ void process(void* instance, const AudProcessContext* context) {
   adoptReady(node);
   followFreewheeling(node, context);
   dispatchEvents(node, context);
-  if (context->num_output_buses == 0 || context->outputs == nullptr) return;
+  if (context->num_output_buses == 0 || context->outputs == nullptr) {
+    // Nothing renders: no voice of the node counts in the budget.
+    VoiceBudget::get().withdraw(node.published);
+    return;
+  }
   limitVoices(node, context->frames);
   if (node.active == nullptr) {
     clearBus(context->outputs[0], context->frames);
