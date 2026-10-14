@@ -140,8 +140,8 @@ struct VoiceManager final : public Voice::StateListener
      * may take more. Each fades out over `fadeFrames` (Voice::steal()).
      * Allocates nothing.
      *
-     * @param count
-     * @param fadeFrames
+     * @param count the sounding voices to steal at least
+     * @param fadeFrames the frames of the fade, at least 1
      * @return VoiceCount the sounding voices it stole and the released ones
      *         among them
      */

@@ -32,6 +32,15 @@
 
 - Add the constraints aud_audio_core ^0.5.1 and aud_audio_graph ^0.5.1
 
+- Add the fixes of the review of the voice budget
+
+- The stolen voices count in live blocks; a node without an output withdraws its voices (READMEs, header, AudSfzVoiceStats)
+- The voices are kept in each block after its events, as the texts now say
+- sampler-008 in the goals and the decisions of the READMEs
+- voiceStats checks the result in debug builds and frees its struct with an arena
+- The steps of max_voices from kNoVoiceLimit; a compile-time check that the voice counters take no lock
+- The parameters of stealVoices and fadeOutStolen documented; the equality test of AudSfzVoiceStats as a loop
+
 ## 0.3.1 - 2026-10-14
 
 ### Added

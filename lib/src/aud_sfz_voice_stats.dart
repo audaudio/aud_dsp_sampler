@@ -17,7 +17,8 @@
 /// final stolen = now.stolen - before.stolen;
 /// ```
 class AudSfzVoiceStats {
-  /// Creates the stats.
+  /// Creates the stats; each parameter sets the field of its name, 0 by
+  /// default.
   const AudSfzVoiceStats({
     this.budget = 0,
     this.reserve = 0,
@@ -41,7 +42,8 @@ class AudSfzVoiceStats {
   /// Of the [sounding] voices, those that are released: key and pedal up.
   final int released;
 
-  /// The voices that `max_voices` and the budget stole so far, in all nodes.
+  /// The voices that `max_voices` and the budget stole so far in the live
+  /// blocks of all nodes; offline renders count none.
   final int stolen;
 
   /// The voices rendered times the frames of their blocks so far, of the

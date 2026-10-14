@@ -50,10 +50,10 @@ constexpr AudParamDescriptor kParams[AUD_SFZ_NUM_PARAMS] = {
      440.0f, 0, 0, 0},
     {sizeof(AudParamDescriptor), "stretch_tuning", "Stretch tuning", "", 0.0f, 1.0f, 0.0f, 0, 0,
      0},
-    // Real time: the node reads it at the end of each block (ticket 29).
+    // Real time: the node reads it after the events of each block (ticket 29).
     {sizeof(AudParamDescriptor), "max_voices", "Max voices", "", 1.0f,
      static_cast<float>(kNoVoiceLimit), static_cast<float>(kNoVoiceLimit),
-     AUD_PARAM_AUTOMATABLE | AUD_PARAM_STEPPED, 255, 0},
+     AUD_PARAM_AUTOMATABLE | AUD_PARAM_STEPPED, kNoVoiceLimit - 1, 0},
 };
 
 // The sample rate, the block and the channels a node assumes until its

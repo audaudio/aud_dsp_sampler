@@ -55,52 +55,17 @@ void main() {
       );
       expect(same, stats);
       expect(same.hashCode, stats.hashCode);
-      final others = [
-        const AudSfzVoiceStats(
-          reserve: 4,
-          sounding: 40,
-          released: 12,
-          stolen: 7,
-          voiceFrames: 123456,
-        ),
-        const AudSfzVoiceStats(
-          budget: 48,
-          sounding: 40,
-          released: 12,
-          stolen: 7,
-          voiceFrames: 123456,
-        ),
-        const AudSfzVoiceStats(
-          budget: 48,
-          reserve: 4,
-          released: 12,
-          stolen: 7,
-          voiceFrames: 123456,
-        ),
-        const AudSfzVoiceStats(
-          budget: 48,
-          reserve: 4,
-          sounding: 40,
-          stolen: 7,
-          voiceFrames: 123456,
-        ),
-        const AudSfzVoiceStats(
-          budget: 48,
-          reserve: 4,
-          sounding: 40,
-          released: 12,
-          voiceFrames: 123456,
-        ),
-        const AudSfzVoiceStats(
-          budget: 48,
-          reserve: 4,
-          sounding: 40,
-          released: 12,
-          stolen: 7,
-        ),
-      ];
-      for (final other in others) {
-        expect(other, isNot(stats));
+      // One field at 0 at a time.
+      AudSfzVoiceStats without(String field) => AudSfzVoiceStats(
+        budget: field == 'budget' ? 0 : stats.budget,
+        reserve: field == 'reserve' ? 0 : stats.reserve,
+        sounding: field == 'sounding' ? 0 : stats.sounding,
+        released: field == 'released' ? 0 : stats.released,
+        stolen: field == 'stolen' ? 0 : stats.stolen,
+        voiceFrames: field == 'voiceFrames' ? 0 : stats.voiceFrames,
+      );
+      for (final field in stats.toJson().keys) {
+        expect(without(field), isNot(stats), reason: field);
       }
       expect(stats, isNot(Object()));
       expect(

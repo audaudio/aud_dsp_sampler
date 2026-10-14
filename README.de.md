@@ -22,7 +22,7 @@ Teil der Audanika Audio Engine; geplant in [aud_audio_pm](https://github.com/aud
 - Kräftiges Spielen überlastet den Audio-Thread nicht: ein Stimmenlimit
   pro Knoten, das sich in Echtzeit ändert, und ein Stimmenbudget für alle
   Knoten des Prozesses, gehalten durch das Stehlen von Stimmen mit einer
-  Ausblendung von 10 ms (Ticket 29)
+  Ausblendung von 10 ms (sampler-008)
 - Auf dem Audio-Thread wird nichts alloziert (interop-001); die nativen
   Tests lassen den Knoten unter dem Watchdog der Engine, dem
   RealtimeSanitizer und dem ThreadSanitizer laufen
@@ -67,6 +67,8 @@ entfällt ohne eines.
     Ladevorgänge in einen Standby-Synth, mit einer Überblendung getauscht
   - [lifecycle-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/lifecycle-002.md):
     die Ressourcen des Prozesses und das Sample-Cache-Budget
+  - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
+    das Stimmenlimit pro Knoten und das Stimmenbudget des Prozesses
   - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
     Nachrichten an Knoten und ihre Antworten
   - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):
@@ -254,7 +256,7 @@ graph.setString(
 
 ### Stimmen
 
-- Am Ende jedes Blocks, nach seinen Events und bevor er rendert, zählt ein
+- In jedem Block, nach seinen Events und bevor er rendert, zählt ein
   Knoten seine klingenden Stimmen - sie spielen und sind weder abgeschaltet
   noch gestohlen - über den spielenden und den ausblendenden Synth, aus der
   Liste der aktiven Stimmen von sfizz. Über seinen Limits stiehlt er den
@@ -281,14 +283,15 @@ graph.setString(
   Überschuss mit jedem Block schrumpft. Offline-Renders zählen keine
   Stimmen und stehlen keine für das Budget. Ein Knoten zieht seine
   Stimmen zurück, wenn er geht, wenn der Graph stoppt oder ihn
-  zurücksetzt, und solange er offline rendert.
+  zurücksetzt, und solange er offline oder ohne Ausgang rendert.
 - Die Reserve (`AudDspSampler.voiceReserve`, 0 bis 16, Standard 4) hält
   unter beiden Limits Stimmen frei, damit eine neue Note sofort eine freie
   Stimme findet, während eine gestohlene ausblendet.
 - `AudDspSampler.voiceStats` liest das Budget, die Reserve, die Stimmen,
   die die Live-Knoten am Ende ihres letzten Blocks klingen ließen und
   losgelassen hatten, und zwei Zähler, die nur wachsen: die Stimmen, die
-  `max_voices` und das Budget stahlen, und die gerenderten Stimmen mal die
+  `max_voices` und das Budget in Live-Blöcken stahlen, und die gerenderten
+  Stimmen mal die
   Frames ihrer Live-Blöcke. Die eigenen Polyphonie-Limits von sfizz und
   ihre Ausblendungen von 6 ms bleiben, wie sie sind.
 

@@ -91,25 +91,22 @@ abstract final class AudDspSampler {
   /// The voices of the process: the budget, the reserve, the voices the
   /// live nodes sound and the counters of the voices stolen and rendered.
   @RecordUse()
-  static AudSfzVoiceStats get voiceStats {
-    final stats = calloc<bindings.AudSfzVoiceStats>();
-    try {
-      stats.ref.struct_size = sizeOf<bindings.AudSfzVoiceStats>();
-      // Takes any struct of its size; nothing else fails.
-      bindings.aud_dsp_sampler_voice_stats(stats);
-      final ref = stats.ref;
-      return AudSfzVoiceStats(
-        budget: ref.budget,
-        reserve: ref.reserve,
-        sounding: ref.sounding,
-        released: ref.released,
-        stolen: ref.stolen,
-        voiceFrames: ref.voice_frames,
-      );
-    } finally {
-      calloc.free(stats);
-    }
-  }
+  static AudSfzVoiceStats get voiceStats => using((arena) {
+    final stats = arena<bindings.AudSfzVoiceStats>();
+    stats.ref.struct_size = sizeOf<bindings.AudSfzVoiceStats>();
+    final result = bindings.aud_dsp_sampler_voice_stats(stats);
+    // Fails only for NULL or a short struct, which this call never passes.
+    assert(result == AUD_OK, AudAbi.resultName(result));
+    final ref = stats.ref;
+    return AudSfzVoiceStats(
+      budget: ref.budget,
+      reserve: ref.reserve,
+      sounding: ref.sounding,
+      released: ref.released,
+      stolen: ref.stolen,
+      voiceFrames: ref.voice_frames,
+    );
+  });
 }
 
 // #############################################################################

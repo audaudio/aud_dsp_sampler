@@ -20,7 +20,7 @@ Part of the Audanika Audio Engine; planned in [aud_audio_pm](https://github.com/
   engine (lifecycle-002)
 - Playing hard does not overload the audio thread: a voice limit per node
   that changes in real time and one voice budget for all nodes of the
-  process, kept by stealing voices with a fade of 10 ms (ticket 29)
+  process, kept by stealing voices with a fade of 10 ms (sampler-008)
 - Nothing allocates on the audio thread (interop-001); the native tests
   run the node under the engine's watchdog, the RealtimeSanitizer and the
   ThreadSanitizer
@@ -65,6 +65,8 @@ one.
     loads into a standby synth, swapped in with a crossfade
   - [lifecycle-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/lifecycle-002.md):
     the resources of the process and the sample cache budget
+  - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
+    the voice limit per node and the voice budget of the process
   - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
     messages to nodes and their answers
   - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):
@@ -249,7 +251,7 @@ graph.setString(
 
 ### Voices
 
-- At the end of each block, after its events and before it renders, a
+- In each block, after its events and before it renders, a
   node counts its voices that sound - they play and are neither turned off
   nor stolen - over the synth that plays and the one that fades out, from
   sfizz's list of active voices. Above its limits it steals the excess:
@@ -272,14 +274,15 @@ graph.setString(
   average of the nodes with voices takes one, so that the excess shrinks
   with every block. Offline renders count no voices and steal none for the
   budget. A node withdraws its voices when it goes, when the graph stops or
-  resets it, and while it renders offline.
+  resets it, and while it renders offline or without an output.
 - The reserve (`AudDspSampler.voiceReserve`, 0 to 16, default 4) keeps free
   voices below both limits, so that a new note finds a free voice at once
   while a stolen one fades.
 - `AudDspSampler.voiceStats` reads the budget, the reserve, the voices the
   live nodes sound and released at the end of their last block, and two
   counters that only grow: the voices that `max_voices` and the budget
-  stole, and the voices rendered times the frames of their live blocks.
+  stole in live blocks, and the voices rendered times the frames of their
+  live blocks.
   sfizz's own polyphony limits and their 6 ms fades stay as they are.
 
 ### Loads

@@ -60,6 +60,9 @@ int32_t budgetShare(const VoiceTally& own, const VoiceProcess& process) {
 // Atomics only: nothing runs when the process ends.
 static_assert(std::is_trivially_destructible<VoiceBudget>::value,
               "the budget of the process outlives every node");
+// The counts take no lock on the audio thread, also on 32-bit targets.
+static_assert(ATOMIC_INT_LOCK_FREE == 2 && ATOMIC_LLONG_LOCK_FREE == 2,
+              "the voice counters must be lock-free");
 
 VoiceBudget& VoiceBudget::get() {
   // Constant-initialized: no guard and no allocation on the first call.

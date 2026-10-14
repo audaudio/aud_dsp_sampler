@@ -234,7 +234,7 @@ struct Voice::Impl
      * @brief Fade the output of a stolen voice out over its rendered block
      * and clean it up at the end of the fade (aud_dsp_sampler, ticket 29).
      *
-     * @param buffer
+     * @param buffer the block the voice rendered, faded in place
      */
     void fadeOutStolen(AudioSpan<float, 2> buffer) noexcept;
 

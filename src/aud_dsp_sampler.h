@@ -37,7 +37,7 @@
 // AUD_ERROR_UNSUPPORTED, like the per-note messages of MIDI 2.0 except poly
 // pressure.
 //
-// The voices (ticket 29): at the end of each block, after its events, a node
+// The voices (ticket 29): in each block, after its events, a node
 // keeps its sounding voices - those that play and are neither turned off nor
 // stolen - below two limits and steals the rest with a linear fade of 10 ms,
 // which starts with the block; a stolen voice is free at the end of its fade
@@ -108,7 +108,7 @@ typedef struct AudSfzVoiceStats {
   int32_t sounding;       // voices that sound, over the live nodes
   int32_t released;       // of them released: key and pedal up
   uint32_t reserved;      // 0
-  uint64_t stolen;        // voices stolen by max_voices and the budget
+  uint64_t stolen;        // voices stolen by max_voices and the budget, in live blocks
   uint64_t voice_frames;  // voices rendered times frames, of live blocks
 } AudSfzVoiceStats;
 
