@@ -30,6 +30,8 @@
 
 - A node processed without an output bus no longer keeps its last voices in the budget of the process
 
+- Add the constraints aud_audio_core ^0.5.1 and aud_audio_graph ^0.5.1
+
 ## 0.3.1 - 2026-10-14
 
 ### Added
