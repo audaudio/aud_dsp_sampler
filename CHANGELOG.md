@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 - 2026-10-14
 
 ### Added
 
@@ -35,10 +35,15 @@
 - Add the fixes of the review of the voice budget
 
 - The stolen voices count in live blocks; a node without an output withdraws its voices (READMEs, header, AudSfzVoiceStats)
+
 - The voices are kept in each block after its events, as the texts now say
+
 - sampler-008 in the goals and the decisions of the READMEs
+
 - voiceStats checks the result in debug builds and frees its struct with an arena
+
 - The steps of max_voices from kNoVoiceLimit; a compile-time check that the voice counters take no lock
+
 - The parameters of stealVoices and fadeOutStolen documented; the equality test of AudSfzVoiceStats as a loop
 
 ## 0.3.1 - 2026-10-14
@@ -221,7 +226,6 @@
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
 
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
-
 
 ## 0.1.0 - 2026-10-08
 
