@@ -6,7 +6,7 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): the
 // gain is converted to linear once per block and needs no buffer; a finite
-// gain is at rest.
+// gain is at rest. Release 0.3.2: once, when the effect is made.
 
 #pragma once
 #include "Effects.h"
@@ -47,14 +47,19 @@ namespace fx {
         bool isAtRest() const override;
 
         /**
+          * @brief The linear factor of the gain, which makeInstance converts
+          * once (Audanika, ticket 28).
+          */
+        float linearGain() const noexcept { return _linearGain; }
+
+        /**
           * @brief Instantiates given the contents of the <effect> block.
           */
         static std::unique_ptr<Effect> makeInstance(absl::Span<const Opcode> members);
 
     private:
-        float linearGain() const;
-
         float _gain = 0; // in dB
+        float _linearGain = 1; // 10^(_gain / 20), converted in makeInstance
     };
 
 } // namespace fx

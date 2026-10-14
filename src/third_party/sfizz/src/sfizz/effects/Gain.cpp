@@ -10,6 +10,8 @@
 // Ticket 28: the gain, which holds for the block, is converted to linear
 // once per block instead of once per sample: the same factor, without a
 // pow per sample on the audio thread. A finite gain is at rest.
+// Release 0.3.2: the factor is converted once, when the effect is made,
+// instead of in every block and in every question whether it is at rest.
 
 /**
    Note(jpc): this effect is book-only, mentioned but not documented
@@ -45,8 +47,7 @@ namespace fx {
 
     void Gain::process(const float* const inputs[], float* const outputs[], unsigned nframes)
     {
-        // to linear
-        const float gain = linearGain();
+        const float gain = _linearGain;
 
         for (unsigned c = 0; c < EffectChannels; ++c) {
             absl::Span<const float> input { inputs[c], nframes };
@@ -55,15 +56,10 @@ namespace fx {
         }
     }
 
-    float Gain::linearGain() const
-    {
-        return std::pow(10.0f, 0.05f * _gain);
-    }
-
     bool Gain::isAtRest() const
     {
         // A silent input times a finite gain is silent.
-        return std::isfinite(linearGain());
+        return std::isfinite(_linearGain);
     }
 
     std::unique_ptr<Effect> Gain::makeInstance(absl::Span<const Opcode> members)
@@ -78,6 +74,7 @@ namespace fx {
                 break;
             }
         }
+        gain->_linearGain = std::pow(10.0f, 0.05f * gain->_gain);
 
         return fx;
     }

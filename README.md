@@ -318,14 +318,30 @@ graph.setString(
   table of stb_vorbis and the CPU caps of dr_flac and dr_mp3 - is built
   once, atomic or guarded by a mutex that only loads take; `NOTICES.md`
   lists the audit (ticket 28).
-- The hot spots of an app's audio thread are faster, with the same output
-  bit for bit (ticket 28): the MIDI state flushes only the event vectors
-  that received events; the compressor calls `log10` and `pow` only above
-  its threshold and while it reduces the gain, and passes silence through
-  while it is at rest; the gain effect converts its gain once per block; a
-  bus whose input is silent skips its effects at rest; a voice converts its
-  pitch and its volume modulation once per run of equal values.
-  `NOTICES.md` lists the changed files.
+- The hot spots of an app's audio thread are faster (ticket 28): the MIDI
+  state flushes only the event vectors that received events; the
+  compressor calls `log10` only for a level above 0.9999 times its linear
+  threshold, 1e-4 below it, at or below which the term of the threshold is
+  exactly 0, and `pow` only while its gain is not exactly 0 dB, and passes
+  silence through while it is at rest; the gain effect converts its gain
+  once, when it is made; a bus whose input is silent skips its effects at
+  rest; a voice converts its pitch and its volume modulation once per run
+  of equal values. The output stays the same bit for bit, but for the rest
+  of the compressor.
+- The compressor comes to rest about a second after a loud sound (release
+  0.3.2): after a silent block it sets a level below 1e-9, a gain within
+  1e-7 dB of 0 dB and a memory of its oversampling filters below 1e-9 to 0.
+  An app's limiter rested 4.4 s after a loud sound, and one with a release
+  of 0.2 s up to 17.9 s, when its detector fell below the smallest float;
+  now after 1.1 s and 4.5 s. A silent block whose filters are silent and
+  whose level lies below the threshold only decays the detectors, as their
+  loop would. The output moves by at most 1.2e-7, within the 1e-5 of
+  decision sampler-007. `NOTICES.md` lists the changed files.
+- Opcodes and events of a controller beyond the last one, 511, are
+  ignored (release 0.3.2), where they wrote or read behind the controllers
+  of the synth: `set_cc512`, `set_hdcc512` and `label_cc512`, the `_onccN`
+  opcodes of the delay, the offset, the end and the loop of a sample and of
+  the delay and the fade of an LFO, and a CC event.
 - The library builds for every ABI of Android, the 32-bit `armeabi-v7a`
   among them, where Abseil's 128-bit integer has no compiler type and
   needs `int128.cc`. On Android it links with `--no-undefined`: a symbol
@@ -358,25 +374,30 @@ node scripts/test-native.js
 ```
 
 - `dart test` runs the Dart tests, the golden renders of the test
-  instrument (`test/goldens`, which `UPDATE_GOLDENS=1` writes) and the
-  native tests.
+  instrument against `test/goldens` and the native tests.
+  `UPDATE_GOLDENS=1 dart test` writes the goldens of the test instrument
+  anew with the current code.
 - `scripts/test-native.js` builds the node, the fork and the engine of
   `aud_audio_graph` with the address and undefined behaviour sanitizers,
   the RealtimeSanitizer - with a probe that proves it catches an
   allocation on the audio thread - and the thread sanitizer, under the
   engine's watchdog. The tests of the fork compile as gnu++14, like sfizz.
 - The tests of ticket 28 compare the faster code with the original: the
-  MIDI state with the original flush on random event streams, the
-  compressor and the gain with their original code on loud, quiet, silent,
-  transient and one-sided signals, and the render of an instrument like an
-  app's with `test/goldens/sfizz_app_instrument.wav`, which release 0.3.0
-  rendered.
+  MIDI state with the original flush on random event streams, the gain bit
+  for bit and the compressor within 1e-6 with their original code on loud,
+  quiet, silent, transient and one-sided signals and on sounds after
+  pauses, and the render of an instrument like an app's with
+  `test/goldens/sfizz_app_instrument.wav`, which release 0.3.0 rendered,
+  within the 1e-5 of sampler-007.
 - `--bench` builds the micro-benchmark `test/native/bench/sfizz_bench.cpp`
   at -O3 with the fork of release 0.3.0 (`AUD_BENCH_BASE` names another
   git ref) and with the fork of now, prints what the flush of the MIDI
-  state, the compressor, the gain, an idle synth and four synths cost per
-  call before and after, and fails when the renders of both differ by more
-  than 1e-6; with `UPDATE_GOLDENS=1` it writes the golden with the old fork.
+  state, the compressor - also in the two seconds after a loud tone -, the
+  gain, an idle synth and four synths cost per call before and after, and
+  fails when the renders of both differ by more than 1e-6.
+  `UPDATE_GOLDENS=1 node scripts/test-native.js --bench` writes
+  `test/goldens/sfizz_app_instrument.wav` with the fork of that release,
+  not with the current code; `dart test` never writes it.
 - `--help` lists the options, `--only=asan|plain|rtsan|tsan` runs one
   build, and an unknown option ends the run with exit code 2.
   `AUD_TEST_FILTER` runs the tests whose name contains it;

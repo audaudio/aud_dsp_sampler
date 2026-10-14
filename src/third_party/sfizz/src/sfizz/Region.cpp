@@ -4,6 +4,12 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm,
+// release 0.3.2): delay_onccN, offset_onccN, end_onccN, loop_start_onccN,
+// loop_end_onccN, lfoX_delay_onccN and lfoX_fade_onccN take the controller
+// numbers 0 to 511 only, like every other opcode of a controller; N = 512
+// made a voice read behind the event vectors of the controllers.
+
 #include "Region.h"
 #include "Defaults.h"
 #include "Opcode.h"
@@ -84,7 +90,7 @@ bool sfz::Region::parseOpcode(const Opcode& rawOpcode, bool cleanOpcode)
         delay = opcode.read(Default::delay);
         break;
     case hash("delay_oncc&"): // also delay_cc&
-        if (opcode.parameters.back() > config::numCCs)
+        if (opcode.parameters.back() >= config::numCCs)
             return false;
 
         delayCC[opcode.parameters.back()] = opcode.read(Default::delayMod);
@@ -99,7 +105,7 @@ bool sfz::Region::parseOpcode(const Opcode& rawOpcode, bool cleanOpcode)
         offsetRandom = opcode.read(Default::offsetRandom);
         break;
     case hash("offset_oncc&"): // also offset_cc&
-        if (opcode.parameters.back() > config::numCCs)
+        if (opcode.parameters.back() >= config::numCCs)
             return false;
 
         offsetCC[opcode.parameters.back()] = opcode.read(Default::offsetMod);
@@ -108,7 +114,7 @@ bool sfz::Region::parseOpcode(const Opcode& rawOpcode, bool cleanOpcode)
         sampleEnd = opcode.read(Default::sampleEnd);
         break;
     case hash("end_oncc&"): // also end_cc&
-        if (opcode.parameters.back() > config::numCCs)
+        if (opcode.parameters.back() >= config::numCCs)
             return false;
 
         endCC[opcode.parameters.back()] = opcode.read(Default::sampleEndMod);
@@ -130,13 +136,13 @@ bool sfz::Region::parseOpcode(const Opcode& rawOpcode, bool cleanOpcode)
         loopRange.setStart(opcode.read(Default::loopStart));
         break;
     case hash("loop_start_oncc&"): // also loop_start_cc&, loop_startcc&
-        if (opcode.parameters.back() > config::numCCs)
+        if (opcode.parameters.back() >= config::numCCs)
             return false;
 
         loopStartCC[opcode.parameters.back()] = opcode.read(Default::loopMod);
         break;
     case hash("loop_end_oncc&"): // also loop_end_cc&, loop_lengthcc&, loop_length_oncc&, loop_length_cc&
-        if (opcode.parameters.back() > config::numCCs)
+        if (opcode.parameters.back() >= config::numCCs)
             return false;
 
         loopEndCC[opcode.parameters.back()] = opcode.read(Default::loopMod);
@@ -1330,7 +1336,7 @@ bool sfz::Region::parseLFOOpcodeV2(const Opcode& opcode)
         lfo.delay = opcode.read(Default::lfoDelay);
         break;
     case hash("lfo&_delay_oncc&"):
-        if (opcode.parameters.back() > config::numCCs)
+        if (opcode.parameters.back() >= config::numCCs)
             return false;
 
         lfo.delayCC[opcode.parameters.back()] = opcode.read(Default::lfoDelayMod);
@@ -1339,7 +1345,7 @@ bool sfz::Region::parseLFOOpcodeV2(const Opcode& opcode)
         lfo.fade = opcode.read(Default::lfoFade);
         break;
     case hash("lfo&_fade_oncc&"):
-        if (opcode.parameters.back() > config::numCCs)
+        if (opcode.parameters.back() >= config::numCCs)
             return false;
 
         lfo.fadeCC[opcode.parameters.back()] = opcode.read(Default::lfoFadeMod);

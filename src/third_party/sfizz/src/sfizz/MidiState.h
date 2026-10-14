@@ -9,7 +9,8 @@
 // the last flush, which a list of fixed size names; it flushed all 642 of
 // them in every block, a third of the sampler's time on an app's audio
 // thread. A vector no event reached holds its one event at delay 0 already,
-// which a flush keeps as it is.
+// which a flush keeps as it is. Release 0.3.2: markForFlush() asserts that
+// its slot exists.
 
 #pragma once
 #include <array>
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include "CCMap.h"
 #include "Range.h"
+#include "utility/Debug.h"
 
 namespace sfz
 {
@@ -254,6 +256,7 @@ private:
      */
     void markForFlush(int slot) noexcept
     {
+        ASSERT(slot >= 0 && slot < numEventSlots);
         if (toFlush[slot])
             return;
         toFlush[slot] = true;

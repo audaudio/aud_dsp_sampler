@@ -27,6 +27,9 @@ http://sam.zoy.org/wtfpl/COPYING for more details.
 // is_cleared () tells whether the memory of the filter is silent, as after
 // clear_buffers (), so that sfizz's compressor can pass silence through
 // without running the filter, which gives silence then and stays silent.
+// Release 0.3.2: settle () clears a memory that lies within a floor of 0, a
+// filter that rings out far below anything audible, so that the compressor
+// comes to rest soon after a sound.
 
 
 
@@ -87,6 +90,21 @@ public:
 			}
 		}
 		return true;
+	}
+	void           settle (float floor)
+	{
+		for (int i = 0; i < NBR_STAGES + 1; ++i)
+		{
+			for (int j = 0; j < 4; ++j)
+			{
+				const float m = _filter [i]._mem [j];
+				if (! (m >= -floor && m <= floor))
+				{
+					return;
+				}
+			}
+		}
+		clear_buffers ();
 	}
 
 

@@ -7,9 +7,11 @@
 // Renders an instrument like an app's (sfizz_app_instrument.hpp) and
 // compares it with the golden the code of release 0.3.0 rendered, before
 // ticket 28 made the MIDI state, the compressor, the gain, the effect bus
-// and the conversions of the voice faster: the render is the same within
-// 1e-6. `UPDATE_GOLDENS=1 node scripts/test-native.js --bench` writes the
-// golden with the code of that release.
+// and the conversions of the voice faster and let the compressor come to
+// rest earlier: the render stays within 1e-5 of full scale per sample, the
+// golden tolerance of decision sampler-007.
+// `UPDATE_GOLDENS=1 node scripts/test-native.js --bench` writes the golden
+// with the code of that release; the current code never writes it.
 
 #include <algorithm>
 #include <cmath>
@@ -54,6 +56,9 @@ struct Folder {
 
 const char* const kGolden = "test/goldens/sfizz_app_instrument.wav";
 
+// The largest difference per sample from the golden (decision sampler-007).
+constexpr float kTolerance = 1e-5f;
+
 } // namespace
 
 AUD_TEST(sfizz_app_instrument_renders_like_the_original) {
@@ -69,15 +74,11 @@ AUD_TEST(sfizz_app_instrument_renders_like_the_original) {
         return;
     float largest = 0;
     float peak = 0;
-    size_t differingBits = 0;
     for (size_t i = 0; i < render.size(); ++i) {
         largest = std::max(largest, std::fabs(render[i] - golden[i]));
         peak = std::max(peak, std::fabs(golden[i]));
-        differingBits += std::memcmp(&render[i], &golden[i], sizeof(float)) == 0 ? 0 : 1;
     }
-    if (largest > 1e-6f || differingBits != 0)
-        std::printf("  the render differs by %g, %zu samples in their bits\n", largest, differingBits);
-    AUD_CHECK(largest <= 1e-6f);
+    AUD_CHECK(largest <= kTolerance);
     // The chord drives the limiter: the golden holds a loud part; the first
     // blocks are silent, the bus skips its effects there.
     AUD_CHECK(peak > 0.5f);

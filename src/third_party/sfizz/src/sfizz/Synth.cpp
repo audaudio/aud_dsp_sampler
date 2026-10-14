@@ -18,6 +18,9 @@
 // without regions loads and plays nothing, e.g. a text with only a comment,
 // as an empty text does; a load without regions fails only when the file
 // cannot be read or the parser reports an error.
+// Ticket 28, release 0.3.2: set_ccN, set_hdccN and label_ccN take the
+// controller numbers 0 to 511 only; N = 512 wrote behind the default values
+// and the event vectors of the controllers.
 
 #include "SynthPrivate.h"
 #include "VirtualFile.h"
@@ -417,7 +420,7 @@ void Synth::Impl::handleControlOpcodes(const std::vector<Opcode>& members)
 
         switch (member.lettersOnlyHash) {
         case hash("set_cc&"):
-            if (Default::ccNumber.bounds.containsWithEnd(member.parameters.back())) {
+            if (Default::ccNumber.bounds.contains(member.parameters.back())) {
                 const auto ccNumber = member.parameters.back();
                 const auto value = member.read(Default::loCC);
                 setDefaultHdcc(ccNumber, value);
@@ -426,7 +429,7 @@ void Synth::Impl::handleControlOpcodes(const std::vector<Opcode>& members)
             }
             break;
         case hash("set_hdcc&"):
-            if (Default::ccNumber.bounds.containsWithEnd(member.parameters.back())) {
+            if (Default::ccNumber.bounds.contains(member.parameters.back())) {
                 const auto ccNumber = member.parameters.back();
                 const auto value = member.read(Default::loNormalized);
                 setDefaultHdcc(ccNumber, value);
@@ -435,7 +438,7 @@ void Synth::Impl::handleControlOpcodes(const std::vector<Opcode>& members)
             }
             break;
         case hash("label_cc&"):
-            if (Default::ccNumber.bounds.containsWithEnd(member.parameters.back()))
+            if (Default::ccNumber.bounds.contains(member.parameters.back()))
                 setCCLabel(member.parameters.back(), std::string(member.value));
             break;
         case hash("label_key&"):

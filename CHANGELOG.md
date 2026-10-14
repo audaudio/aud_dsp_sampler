@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add an earlier compressor rest and CC range checks
+- Settle the compressor's level below 1e-9, gain within 1e-7 dB and hiir filters below 1e-9 after a silent block: an app's limiter rests after 1.1 s instead of 4.4 s, output within 1.2e-7
+- Decay a silent compressor below its threshold without its filters and gains, its state bit for bit
+- Ignore CC numbers out of range in MidiState::ccEvent, set_cc, set_hdcc, label_cc and the _onccN opcodes of regions
+- Assert the slot in MidiState::markForFlush
+- Convert the gain of the gain effect once in makeInstance
+- Move the tests of the gain, the bus and SameArgumentCache into files named after their code
+- Compare the compressor within 1e-6 and the app render within 1e-5 (sampler-007)
+- Keep the two uses of UPDATE_GOLDENS apart in both READMEs
+
 ## 0.3.1 - 2026-10-14
 
 ### Added
@@ -180,6 +194,7 @@
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
 
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
+
 
 ## 0.1.0 - 2026-10-08
 

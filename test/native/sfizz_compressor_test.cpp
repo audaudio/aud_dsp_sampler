@@ -4,18 +4,23 @@
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
 
-// Tests the compressor and the gain of the sfizz fork against their
-// originals (ticket 28): the compressor calls log10 only above a level just
-// below its threshold and pow only for a gain other than 0 dB, passes
-// silence through while it is at rest, and a bus whose input is silent
-// skips its effects at rest; the gain effect converts its gain once per
-// block. The originals live on in this file: the Faust code of
-// effects/gen/compressor.hxx as Faust 2.30.5 generated it (STK-4.3, see
-// src/third_party/NOTICES.md) and the process functions of
-// effects/Compressor.cpp and effects/Gain.cpp of version 0.3.0. On loud,
-// quiet, silent, transient and stereo-linked signals, with the settings of
-// an app's limiter and others, the outputs are the same, bit for bit; only
-// the sign of a zero may differ, which no later stage of the synth sees.
+// Tests the compressor of the sfizz fork (src/sfizz/effects/Compressor.cpp
+// and effects/gen/compressor.hxx) against its original (ticket 28): it
+// calls log10 only above a level just below its threshold and pow only for
+// a gain other than 0 dB, and passes silence through while it is at rest.
+// After a silent block it settles a level, a gain and a memory of its
+// oversampling filters below their floors to 0, so that it comes to rest
+// about a second after a loud sound, and a silent block whose filters are
+// silent and whose level lies below the threshold only decays its
+// detectors (release 0.3.2). The original lives on in this file: the Faust
+// code of effects/gen/compressor.hxx as Faust 2.30.5 generated it
+// (STK-4.3, see src/third_party/NOTICES.md) and the process function of
+// effects/Compressor.cpp of version 0.3.0. On loud, quiet, silent,
+// transient and stereo-linked signals and on sounds after pauses of every
+// length, with the settings of an app's limiter and others, the outputs
+// differ by at most 1e-6 (decision sampler-007 allows 1e-5); a signal
+// without a silent block gives the same values, and only the sign of a zero
+// may differ, which no later stage of the synth sees.
 
 #include <algorithm>
 #include <cmath>
@@ -28,13 +33,11 @@
 #include <vector>
 
 #include "Effects.h"
-#include "MathHelpers.h"
 #include "Opcode.h"
 #include "OversamplerHelpers.h"
-#include "SfzHelpers.h"
 #include "ScopedFTZ.h"
 #include "effects/Compressor.h"
-#include "effects/Gain.h"
+#include "effects/gen/compressor.hxx"
 
 #include "aud_test.hpp"
 
@@ -232,19 +235,6 @@ private:
     hiir::Upsampler2x<12> upsampler2x_[2];
 };
 
-// Gain::process of 0.3.0: the gain converted for every sample.
-void originalGain(float gainDb, const float* const inputs[], float* const outputs[], unsigned nframes)
-{
-    std::vector<float> gains(nframes, gainDb);
-    for (unsigned i = 0; i < nframes; ++i)
-        gains[i] = std::pow(10.0f, 0.05f * gains[i]);
-    for (unsigned c = 0; c < 2; ++c) {
-        absl::Span<const float> input { inputs[c], nframes };
-        absl::Span<float> output { outputs[c], nframes };
-        sfz::applyGain(absl::Span<const float> { gains }, input, output);
-    }
-}
-
 // ############################################################################
 // Signals and comparisons
 
@@ -276,8 +266,13 @@ void appendNoise(Stereo& signal, size_t frames, float amplitude, std::mt19937& r
     }
 }
 
+// The largest difference the compressor may make to the output of the
+// original: the settled state moves it by about one step of a float near 1.
+constexpr double kTolerance = 1e-6;
+
 // The signals the tests compress: loud and quiet tones, silence, clicks
-// between long silences, one channel alone, and noise around the threshold.
+// between long silences, one channel alone, noise around the threshold, and
+// sounds after pauses of every length.
 std::vector<std::pair<std::string, Stereo>> signals()
 {
     std::mt19937 random(28);
@@ -308,6 +303,22 @@ std::vector<std::pair<std::string, Stereo>> signals()
     Stereo noise;
     appendNoise(noise, 48000, 0.5f, random);
     result.emplace_back("noise", noise);
+    // Tones, and clicks near an app's threshold, after pauses that end
+    // while the level falls through the threshold, before and after an
+    // app's limiter comes to rest, and before and after one with a release
+    // of 0.2 s does: after 4 s, a tone at the threshold of -30 dB meets a
+    // level the original still holds and the fork settled, and its output
+    // moves by one step of a float near 1.5, 1.2e-7.
+    Stereo pauses;
+    const float gaps[] = { 0.02f, 0.1f, 0.3f, 0.6f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f, 7.0f };
+    const float levels[] = { 2.0f, 0.95f, 1e-3f, 0.5f, 1.2f, 0.94f, 3.0f, 1e-5f, 0.9f, 1.0f, 0.97f, 2.0f };
+    for (int k = 0; k < 12; ++k) {
+        append(pauses, 4800, levels[k], levels[(k + 3) % 12], 220.0f + 50 * k);
+        append(pauses, static_cast<size_t>(gaps[k] * kSampleRate), 0.0f, 0.0f, 0.0f);
+        append(pauses, 96, 0.96f, 0.96f, 3000.0f);
+        append(pauses, static_cast<size_t>(gaps[(k + 5) % 12] * kSampleRate), 0.0f, 0.0f, 0.0f);
+    }
+    result.emplace_back("pauses", pauses);
     return result;
 }
 
@@ -315,19 +326,21 @@ std::vector<std::pair<std::string, Stereo>> signals()
 // shorter and longer ones.
 const std::vector<unsigned> kBlocks = { 180, 1, 17, 64, 256, 3, 180, 100 };
 
-// The differences between two outputs: in bits, and in value.
+// The differences between two outputs: the values that differ, and the
+// largest difference; NaN against NaN is no difference.
 struct Difference {
-    size_t bits = 0;
     size_t values = 0;
+    double largest = 0;
 };
 
 void compare(const float* a, const float* b, size_t frames, Difference& difference)
 {
     for (size_t i = 0; i < frames; ++i) {
-        if (std::memcmp(&a[i], &b[i], sizeof(float)) != 0)
-            difference.bits += 1;
-        if (!(a[i] == b[i]) && !(std::isnan(a[i]) && std::isnan(b[i])))
-            difference.values += 1;
+        if (a[i] == b[i] || (std::isnan(a[i]) && std::isnan(b[i])))
+            continue;
+        difference.values += 1;
+        const double by = std::fabs(static_cast<double>(a[i]) - b[i]);
+        difference.largest = std::max(difference.largest, std::isnan(by) ? INFINITY : by);
     }
 }
 
@@ -340,11 +353,18 @@ std::unique_ptr<sfz::Effect> makeCompressor(const CompSettings& settings)
     return effect;
 }
 
+// What a comparison of the compressors saw besides the difference:
+// whether the compressor was at rest after a block, whether it came back to
+// rest after it had sound, and whether a block was silent.
+struct Course {
+    bool rested = false;
+    bool returned = false;
+    bool silentBlock = false;
+};
+
 // Compresses `signal` with the fork's compressor and the original in blocks
 // of kBlocks, every other block in place; returns how the outputs differ.
-// `rested` tells whether the compressor was at rest after a block, `returned`
-// whether it came back to rest after it had sound.
-Difference compareCompressors(const CompSettings& settings, const Stereo& signal, bool& rested, bool& returned)
+Difference compareCompressors(const CompSettings& settings, const Stereo& signal, Course& course)
 {
     std::unique_ptr<sfz::Effect> effect = makeCompressor(settings);
     OriginalCompressor original(settings, kSampleRate, kMaxFrames);
@@ -352,8 +372,7 @@ Difference compareCompressors(const CompSettings& settings, const Stereo& signal
     std::vector<float> in[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
     std::vector<float> out[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
     std::vector<float> expected[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
-    rested = false;
-    returned = false;
+    course = Course();
     bool stirred = false;
     size_t block = 0;
     for (size_t done = 0; done < signal.size();) {
@@ -364,6 +383,7 @@ Difference compareCompressors(const CompSettings& settings, const Stereo& signal
             std::copy(source.begin() + done, source.begin() + done + frames, in[c].begin());
         }
         const float* inputs[2] = { in[0].data(), in[1].data() };
+        course.silentBlock = course.silentBlock || sfz::isSilent(inputs, frames);
         float* expectedPointers[2] = { expected[0].data(), expected[1].data() };
         {
             // The synth renders with denormals flushed to zero.
@@ -380,8 +400,8 @@ Difference compareCompressors(const CompSettings& settings, const Stereo& signal
         for (int c = 0; c < 2; ++c)
             compare(inPlace ? in[c].data() : out[c].data(), expected[c].data(), frames, difference);
         const bool atRest = effect->isAtRest();
-        rested = rested || atRest;
-        returned = returned || (stirred && atRest);
+        course.rested = course.rested || atRest;
+        course.returned = course.returned || (stirred && atRest);
         stirred = stirred || !atRest;
         done += frames;
         block += 1;
@@ -389,16 +409,23 @@ Difference compareCompressors(const CompSettings& settings, const Stereo& signal
     return difference;
 }
 
+// The settings of an app's limiter, with a release of `release` seconds.
+CompSettings appLimiter(float release)
+{
+    CompSettings app;
+    app.attack = 0;
+    app.release = release;
+    app.ratio = 50;
+    app.threshold = -0.5f;
+    return app;
+}
+
 // The settings of the compressors: an app's limiter, linked and not, and
 // others with an attack, a gain and the extremes of the opcodes.
 std::vector<std::pair<std::string, CompSettings>> compSettings()
 {
     std::vector<std::pair<std::string, CompSettings>> result;
-    CompSettings app;
-    app.attack = 0;
-    app.release = 0.05f;
-    app.ratio = 50;
-    app.threshold = -0.5f;
+    CompSettings app = appLimiter(0.05f);
     result.emplace_back("app limiter", app);
     app.stlink = true;
     result.emplace_back("app limiter, linked", app);
@@ -457,6 +484,69 @@ uint32_t bitsOf(float value)
     return bits;
 }
 
+// The seconds a compressor takes to come to rest in silence after half a
+// second of a stereo tone of `amplitude`, in blocks of an app's 180 frames;
+// -1 if it does not within 20 s.
+double secondsToRest(const CompSettings& settings, float amplitude)
+{
+    constexpr unsigned kFrames = 180;
+    std::unique_ptr<sfz::Effect> effect = makeCompressor(settings);
+    std::vector<float> in[2] = { std::vector<float>(kFrames), std::vector<float>(kFrames) };
+    std::vector<float> out[2] = { std::vector<float>(kFrames), std::vector<float>(kFrames) };
+    const float* inputs[2] = { in[0].data(), in[1].data() };
+    float* outputs[2] = { out[0].data(), out[1].data() };
+    ScopedFTZ ftz;
+    const size_t burst = static_cast<size_t>(kSampleRate / 2);
+    for (size_t done = 0; done < burst; done += kFrames) {
+        for (unsigned i = 0; i < kFrames; ++i) {
+            const double t = static_cast<double>(done + i) / kSampleRate;
+            in[0][i] = amplitude * static_cast<float>(std::sin(2 * M_PI * 220 * t));
+            in[1][i] = amplitude * static_cast<float>(std::sin(2 * M_PI * 222 * t));
+        }
+        effect->process(inputs, outputs, kFrames);
+    }
+    for (int c = 0; c < 2; ++c)
+        std::fill(in[c].begin(), in[c].end(), 0.0f);
+    for (size_t blocks = 0; blocks * kFrames < 20 * kSampleRate; ++blocks) {
+        if (effect->isAtRest())
+            return blocks * static_cast<double>(kFrames) / kSampleRate;
+        effect->process(inputs, outputs, kFrames);
+    }
+    return -1;
+}
+
+// The Faust compressor of the effect with `settings`, at the oversampled
+// rate and cleared, as the effect sets it up.
+faustCompressor faustOf(const CompSettings& settings)
+{
+    faustCompressor comp;
+    comp.instanceResetUserInterface();
+    comp.setAttack(settings.attack);
+    comp.setRelease(settings.release);
+    comp.setThreshold(settings.threshold);
+    comp.setRatio(settings.ratio);
+    comp.instanceConstants(2 * static_cast<int>(kSampleRate));
+    comp.instanceClear();
+    return comp;
+}
+
+// Whether two states of a Faust compressor hold the same values; the sign
+// of a zero does not count.
+bool sameState(const faustCompressor::State& a, const faustCompressor::State& b)
+{
+    return a.fRec2 == b.fRec2 && a.fRec1 == b.fRec1 && a.fRec0 == b.fRec0;
+}
+
+// Runs compute() of `comp` on `count` samples of silence.
+void computeSilence(faustCompressor& comp, int count)
+{
+    std::vector<float> zeros(count, 0.0f);
+    std::vector<float> gains(count);
+    const float* inputs[] = { zeros.data() };
+    float* outputs[] = { gains.data() };
+    comp.compute(count, inputs, outputs);
+}
+
 } // namespace
 
 // ############################################################################
@@ -491,40 +581,46 @@ AUD_TEST(sfizz_compressor_skips_log10_only_where_the_original_term_is_zero) {
 }
 
 AUD_TEST(sfizz_compressor_compresses_like_the_original) {
+    // Within 1e-6 of the original on every signal; a signal without a silent
+    // block, after which nothing settles, gives the same values. Silence
+    // keeps every compressor at rest, where it passes silence through
+    // without processing it, and the pause of 6 s brings every one back to
+    // rest before the next click.
     const std::vector<std::pair<std::string, Stereo>> inputs = signals();
     for (const auto& settings : compSettings()) {
         for (const auto& signal : inputs) {
-            bool rested = false;
-            bool returned = false;
-            const Difference difference = compareCompressors(settings.second, signal.second, rested, returned);
-            if (difference.values != 0 || difference.bits != 0) {
-                std::printf("  %s, %s: %zu values and %zu bit patterns differ\n", settings.first.c_str(),
-                    signal.first.c_str(), difference.values, difference.bits);
-            }
-            AUD_CHECK(difference.values == 0);
-            AUD_CHECK(difference.bits == 0);
-            // Silence keeps every compressor at rest, where it passes silence
-            // through without processing it, and the pause of 6 s brings one
-            // with a release up to 50 ms back to rest before the next click;
-            // its detector falls below the smallest float in about 4 s.
+            Course course;
+            const Difference difference = compareCompressors(settings.second, signal.second, course);
+            AUD_CHECK(difference.largest <= kTolerance);
+            if (!course.silentBlock)
+                AUD_CHECK(difference.values == 0);
             if (signal.first == "silent")
-                AUD_CHECK(rested);
-            if (signal.first == "transients" && settings.second.release <= 0.05f) {
-                if (!returned)
-                    std::printf("  %s did not come back to rest\n", settings.first.c_str());
-                AUD_CHECK(returned);
-            }
+                AUD_CHECK(course.rested);
+            if (signal.first == "transients")
+                AUD_CHECK(course.returned);
         }
     }
 }
 
+AUD_TEST(sfizz_compressor_comes_to_rest_soon_after_a_loud_sound) {
+    // Half a second of a tone at twice full scale, then silence: an app's
+    // limiter comes to rest after about a second, with a release of 0.2 s
+    // after about 4.5 s, and every other setting too, the one with a gain
+    // of 6 dB that doubles the level last. Release 0.3.1 waited until the
+    // detector fell below the smallest float: 4.4 s for the app's limiter,
+    // 17.9 s for the gain of 6 dB.
+    const double app = secondsToRest(appLimiter(0.05f), 2.0f);
+    AUD_CHECK(app > 0 && app <= 1.1);
+    const double slow = secondsToRest(appLimiter(0.2f), 2.0f);
+    AUD_CHECK(slow > 0 && slow <= 4.5);
+    for (const auto& settings : compSettings()) {
+        const double seconds = secondsToRest(settings.second, 2.0f);
+        AUD_CHECK(seconds > 0 && seconds <= 4.6);
+    }
+}
+
 AUD_TEST(sfizz_compressor_is_at_rest_only_when_silence_stays_silent) {
-    CompSettings app;
-    app.attack = 0;
-    app.release = 0.05f;
-    app.ratio = 50;
-    app.threshold = -0.5f;
-    std::unique_ptr<sfz::Effect> effect = makeCompressor(app);
+    std::unique_ptr<sfz::Effect> effect = makeCompressor(appLimiter(0.05f));
     AUD_CHECK(effect->isAtRest());
     std::vector<float> in[2] = { std::vector<float>(kMaxFrames, 0.0f), std::vector<float>(kMaxFrames, 0.0f) };
     std::vector<float> out[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
@@ -539,17 +635,21 @@ AUD_TEST(sfizz_compressor_is_at_rest_only_when_silence_stays_silent) {
     in[0][10] = 1e-3f;
     effect->process(inputs, outputs, kMaxFrames);
     AUD_CHECK(!effect->isAtRest());
-    // Silence brings it back to rest within seconds, with denormals
+    // Silence brings it back to rest within a second, with denormals
     // flushed to zero as the synth renders: the detector falls with its
-    // release of 50 ms below the smallest float in about 4 s.
+    // release of 50 ms below its floor of 1e-9 and settles to 0, and the
+    // output stays silent.
     in[0][10] = 0.0f;
     int blocks = 0;
+    bool silentOutput = true;
     while (!effect->isAtRest() && blocks < 2000) {
         effect->process(inputs, outputs, kMaxFrames);
+        silentOutput = silentOutput && std::fabs(out[0][0]) < 1e-3f;
         blocks += 1;
     }
     AUD_CHECK(effect->isAtRest());
-    AUD_CHECK(blocks * kMaxFrames < 5 * 48000);
+    AUD_CHECK(blocks * kMaxFrames < 48000);
+    AUD_CHECK(silentOutput);
     // clear() resets the detector but, as in the original, not the
     // memory of the oversampling filters, which the silence that follows
     // brings to rest.
@@ -564,145 +664,99 @@ AUD_TEST(sfizz_compressor_is_at_rest_only_when_silence_stays_silent) {
 }
 
 // ############################################################################
-// The gain
+// The detectors in silence
 
-AUD_TEST(sfizz_gain_effect_gains_like_the_original) {
-    std::mt19937 random(28);
-    Stereo signal;
-    appendNoise(signal, 4096, 0.5f, random);
-    for (float gainDb : { 7.35f, 0.0f, -6.0f, -144.0f, 48.0f, 0.1f }) {
-        const std::vector<sfz::Opcode> opcodes = { { "type", "gain" }, { "gain", std::to_string(gainDb) } };
-        std::unique_ptr<sfz::Effect> effect = sfz::fx::Gain::makeInstance(opcodes);
-        effect->setSampleRate(kSampleRate);
-        effect->setSamplesPerBlock(kMaxFrames);
-        AUD_CHECK(effect->isAtRest());
-        const float readDb = sfz::Opcode("gain", std::to_string(gainDb)).read(sfz::Default::volume);
-        Difference difference;
-        std::vector<float> out[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
-        std::vector<float> expected[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
-        for (size_t done = 0; done + kMaxFrames <= signal.size(); done += kMaxFrames) {
-            const float* inputs[2] = { signal.left.data() + done, signal.right.data() + done };
-            float* outputs[2] = { out[0].data(), out[1].data() };
-            float* expectedPointers[2] = { expected[0].data(), expected[1].data() };
-            effect->process(inputs, outputs, kMaxFrames);
-            originalGain(readDb, inputs, expectedPointers, kMaxFrames);
-            for (int c = 0; c < 2; ++c)
-                compare(out[c].data(), expected[c].data(), kMaxFrames, difference);
+AUD_TEST(sfizz_compressor_decays_silence_like_its_loop) {
+    // A loud tone on the left detector, a quieter one on the right, then
+    // silence in blocks of every size: wherever a detector may decay without
+    // its loop, its level lies at or below the threshold, and decaySilence()
+    // and decaySilenceTwo() leave the state the loop leaves, value for value,
+    // the gain of an attack among it.
+    for (const auto& settings : compSettings()) {
+        ScopedFTZ ftz;
+        faustCompressor loop[2] = { faustOf(settings.second), faustOf(settings.second) };
+        for (int c = 0; c < 2; ++c) {
+            std::vector<float> tone(9600);
+            std::vector<float> gains(tone.size());
+            for (size_t i = 0; i < tone.size(); ++i)
+                tone[i] = (c == 0 ? 2.0f : 0.3f) * static_cast<float>(std::sin(2 * M_PI * 220 * i / (2 * kSampleRate)));
+            const float* toneInputs[] = { tone.data() };
+            float* gainOutputs[] = { gains.data() };
+            loop[c].compute(static_cast<int>(tone.size()), toneInputs, gainOutputs);
         }
-        AUD_CHECK(difference.bits == 0);
+        faustCompressor fast[2] = { loop[0], loop[1] };
+        const float skipBelow = skipBelowOf(settings.second.threshold);
+        size_t decayed = 0;
+        size_t refused = 0;
+        size_t differing = 0;
+        for (size_t block = 0; block < 2000; ++block) {
+            const int count = 2 * static_cast<int>(kBlocks[block % kBlocks.size()]);
+            faustCompressor::Slow k[2] = { fast[0].slow(), fast[1].slow() };
+            bool can[2];
+            for (int c = 0; c < 2; ++c) {
+                can[c] = fast[c].canDecaySilence(k[c]);
+                AUD_CHECK(can[c] == (fast[c].state().fRec2 <= skipBelow));
+            }
+            if (can[0] && can[1]) {
+                faustCompressor::decaySilenceTwo(fast[0], k[0], fast[1], k[1], count);
+            } else {
+                for (int c = 0; c < 2; ++c) {
+                    if (can[c])
+                        fast[c].decaySilence(k[c], count);
+                    else
+                        computeSilence(fast[c], count);
+                }
+            }
+            decayed += can[0] ? 1 : 0;
+            refused += can[0] ? 0 : 1;
+            for (int c = 0; c < 2; ++c) {
+                computeSilence(loop[c], count);
+                differing += sameState(fast[c].state(), loop[c].state()) ? 0 : 1;
+            }
+        }
+        AUD_CHECK(decayed > 0);
+        AUD_CHECK(refused > 0);
+        AUD_CHECK(differing == 0);
     }
-    // A gain the opcode allows beyond its range, so large that silence
-    // would become NaN, is not at rest.
-    const std::vector<sfz::Opcode> huge = { { "type", "gain" }, { "gain", "1000" } };
-    AUD_CHECK(!sfz::fx::Gain::makeInstance(huge)->isAtRest());
 }
 
-// ############################################################################
-// The bus
-
-AUD_TEST(sfizz_effect_bus_skips_silent_effects_at_rest_like_the_original) {
-    // An app's output stage on the main bus: the limiter, then the gain.
-    // Blocks of a tone, of nothing at all, of zeros a voice added and long
-    // pauses: the bus skips its effects only where they would give silence,
-    // and gives what the original effects give.
-    CompSettings app;
-    app.attack = 0;
-    app.release = 0.05f;
-    app.ratio = 50;
-    app.threshold = -0.5f;
-    sfz::EffectBus bus;
-    bus.addEffect(sfz::fx::Compressor::makeInstance(app.opcodes()));
-    const std::vector<sfz::Opcode> gainOpcodes = { { "type", "gain" }, { "gain", "7.35" } };
-    bus.addEffect(sfz::fx::Gain::makeInstance(gainOpcodes));
-    bus.setGainToMain(1.0f);
-    bus.setGainToMix(0.0f);
-    bus.setSampleRate(kSampleRate);
-    bus.setSamplesPerBlock(kMaxFrames);
-    OriginalCompressor original(app, kSampleRate, kMaxFrames);
-    const float gainDb = sfz::Opcode("gain", "7.35").read(sfz::Default::volume);
-
-    Stereo signal;
-    append(signal, 4800, 0.0f, 0.0f, 0.0f);
-    append(signal, 9600, 2.5f, 2.0f, 220.0f);
-    append(signal, 6 * 48000, 0.0f, 0.0f, 0.0f);
-    append(signal, 4800, 0.3f, 0.3f, 440.0f);
-    append(signal, 6 * 48000, 0.0f, 0.0f, 0.0f);
-
-    Difference difference;
-    std::vector<float> in[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
-    std::vector<float> main[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
-    std::vector<float> mix[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
-    std::vector<float> expected[2] = { std::vector<float>(kMaxFrames), std::vector<float>(kMaxFrames) };
-    size_t block = 0;
-    for (size_t done = 0; done < signal.size(); block += 1) {
-        const unsigned frames = static_cast<unsigned>(std::min<size_t>(kBlocks[block % kBlocks.size()], signal.size() - done));
-        bool silent = true;
-        for (int c = 0; c < 2; ++c) {
-            const std::vector<float>& source = c == 0 ? signal.left : signal.right;
-            std::copy(source.begin() + done, source.begin() + done + frames, in[c].begin());
-            for (unsigned i = 0; i < frames; ++i)
-                silent = silent && in[c][i] == 0.0f;
-            std::fill(main[c].begin(), main[c].end(), 0.0f);
-            std::fill(mix[c].begin(), mix[c].end(), 0.0f);
-        }
-        const float* inputs[2] = { in[0].data(), in[1].data() };
-        float* mainPointers[2] = { main[0].data(), main[1].data() };
-        float* mixPointers[2] = { mix[0].data(), mix[1].data() };
-        float* expectedPointers[2] = { expected[0].data(), expected[1].data() };
-        {
-            ScopedFTZ ftz;
-            bus.clearInputs(frames);
-            // A silent block reaches the bus as no voice at all, or as the
-            // zeros of a voice that ended.
-            if (!silent || block % 3 == 0)
-                bus.addToInputs(inputs, 1.0f, frames);
-            bus.process(frames);
-            bus.mixOutputsTo(mainPointers, mixPointers, frames);
-            original.process(inputs, expectedPointers, frames);
-            originalGain(gainDb, expectedPointers, expectedPointers, frames);
-        }
-        for (int c = 0; c < 2; ++c) {
-            // The main output of the original bus: 0 plus the effects' output.
-            for (unsigned i = 0; i < frames; ++i)
-                expected[c][i] = 0.0f + 1.0f * expected[c][i];
-            compare(main[c].data(), expected[c].data(), frames, difference);
-        }
-        done += frames;
-    }
-    AUD_CHECK(difference.bits == 0);
+AUD_TEST(sfizz_compressor_decays_silence_only_where_the_loop_gives_silence) {
+    // A level above the threshold, a level or a gain that is not a number,
+    // a gain whose factor would overflow and a negative attack, whose
+    // coefficient exceeds 1: the loop runs.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    faustCompressor comp = faustOf(appLimiter(0.05f));
+    auto can = [&comp](faustCompressor::State state) {
+        comp.setState(state);
+        return comp.canDecaySilence(comp.slow());
+    };
+    AUD_CHECK(can({ 0.5f, 0.5f, -6.0f }));
+    AUD_CHECK(can({ 0.0f, 0.0f, 0.0f }));
+    AUD_CHECK(!can({ 0.95f, 0.95f, 0.0f }));
+    AUD_CHECK(!can({ nan, nan, 0.0f }));
+    AUD_CHECK(!can({ 0.5f, 0.5f, nan }));
+    AUD_CHECK(!can({ 0.5f, 0.5f, 800.0f }));
+    AUD_CHECK(!can({ -0.5f, -0.5f, 0.0f }));
+    comp.setAttack(-1.0f);
+    AUD_CHECK(!can({ 0.5f, 0.5f, 0.0f }));
 }
 
-// ############################################################################
-// Conversions per sample
-
-AUD_TEST(sfizz_same_argument_cache_gives_the_results_of_every_call) {
-    // Runs of equal arguments, both zeros, NaN and denormals: the cached
-    // conversions give the bits the calls give.
-    std::mt19937 random(28);
-    std::uniform_real_distribution<float> cents(-2400.0f, 2400.0f);
-    std::uniform_int_distribution<int> runs(1, 40);
-    std::vector<float> arguments;
-    while (arguments.size() < 100000) {
-        float value = cents(random);
-        switch (arguments.size() % 7) {
-        case 0: value = 0.0f; break;
-        case 1: value = -0.0f; break;
-        case 2: value = std::numeric_limits<float>::quiet_NaN(); break;
-        case 3: value = std::numeric_limits<float>::denorm_min(); break;
-        default: break;
-        }
-        arguments.insert(arguments.end(), runs(random), value);
-    }
-    auto ratioOfCents = cacheSameArgument([](float c) { return sfz::centsFactor(c); });
-    auto gainOfDb = cacheSameArgument([](float dB) { return db2mag(dB); });
-    size_t differing = 0;
-    for (float argument : arguments) {
-        const float ratio = ratioOfCents(argument);
-        const float expectedRatio = sfz::centsFactor(argument);
-        const float gain = gainOfDb(argument * 0.01f);
-        const float expectedGain = db2mag(argument * 0.01f);
-        differing += std::memcmp(&ratio, &expectedRatio, sizeof(float)) == 0 ? 0 : 1;
-        differing += std::memcmp(&gain, &expectedGain, sizeof(float)) == 0 ? 0 : 1;
-    }
-    AUD_CHECK(differing == 0);
+AUD_TEST(sfizz_compressor_settles_only_what_lies_below_its_floors) {
+    // A level of at most 1e-9 and a gain within 1e-7 dB of 0 dB become 0,
+    // each on its own; above the floors and NaN stay.
+    faustCompressor comp = faustOf(appLimiter(0.05f));
+    auto settled = [&comp](faustCompressor::State state) {
+        comp.setState(state);
+        comp.settle(1e-9f, 1e-7f);
+        return comp.state();
+    };
+    AUD_CHECK(sameState(settled({ 1e-9f, 1e-9f, -1e-7f }), { 0.0f, 0.0f, 0.0f }));
+    AUD_CHECK(comp.isAtRest());
+    AUD_CHECK(sameState(settled({ 0.0f, 0.0f, 1e-7f }), { 0.0f, 0.0f, 0.0f }));
+    AUD_CHECK(sameState(settled({ 2e-9f, 2e-9f, -5e-8f }), { 2e-9f, 2e-9f, 0.0f }));
+    AUD_CHECK(!comp.isAtRest());
+    AUD_CHECK(sameState(settled({ 5e-10f, 5e-10f, -2e-7f }), { 0.0f, 0.0f, -2e-7f }));
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const faustCompressor::State kept = settled({ nan, nan, nan });
+    AUD_CHECK(std::isnan(kept.fRec2) && std::isnan(kept.fRec1) && std::isnan(kept.fRec0));
 }

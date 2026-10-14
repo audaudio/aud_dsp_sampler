@@ -7,7 +7,8 @@
 // Tests the synth of the sfizz fork (src/sfizz/Synth.cpp) without the node:
 // what a load keeps of the errors of its parser, how it drops the regions
 // whose samples it cannot read, and that an instrument without regions
-// loads (ticket 27).
+// loads (ticket 27); the opcodes of a controller that does not exist are
+// ignored (release 0.3.2).
 
 #include <algorithm>
 #include <cmath>
@@ -99,4 +100,38 @@ AUD_TEST(sfizz_synth_drops_a_region_from_every_list_that_points_at_it) {
   }
   synth.noteOn(0, 61, 100);
   AUD_CHECK(synth.getNumActiveVoices() == 1);
+}
+
+// ############################################################################
+// Controllers that do not exist
+
+AUD_TEST(sfizz_synth_ignores_the_controls_of_a_controller_out_of_range) {
+  // set_cc512, set_hdcc512 and label_cc512 name a controller beyond the
+  // last one, 511: the load ignores them, where it wrote behind the default
+  // values and the event vectors of the controllers. The controllers keep
+  // what a load without them gives; 510 and 511 take their values.
+  const std::string inRange =
+      "<control> set_cc511=64 set_hdcc510=0.25 label_cc511=Last\n<region> sample=*sine\n";
+  const std::string beyond =
+      "<control> set_cc512=100 set_hdcc512=0.5 label_cc512=Beyond set_cc511=64 "
+      "set_hdcc510=0.25 label_cc511=Last\n<region> sample=*sine\n";
+  sfz::Synth expected;
+  AUD_CHECK(expected.loadSfzString("/aud_dsp_sampler/controllers.sfz", inRange));
+  sfz::Synth synth;
+  AUD_CHECK(synth.loadSfzString("/aud_dsp_sampler/controllers.sfz", beyond));
+  AUD_CHECK(synth.getParseErrors().empty());
+  size_t differing = 0;
+  for (int cc = 0; cc < sfz::config::numCCs; ++cc) {
+    differing += synth.getDefaultHdcc(cc) == expected.getDefaultHdcc(cc) ? 0 : 1;
+    differing += synth.getHdcc(cc) == expected.getHdcc(cc) ? 0 : 1;
+  }
+  AUD_CHECK(differing == 0);
+  AUD_CHECK(synth.getDefaultHdcc(510) == 0.25f);
+  AUD_CHECK(synth.getHdcc(510) == 0.25f);
+  AUD_CHECK(synth.getDefaultHdcc(511) > 0.5f);
+  AUD_CHECK(synth.getCCLabels() == expected.getCCLabels());
+  const std::vector<sfz::CCNamePair>& labels = synth.getCCLabels();
+  AUD_CHECK(std::count(labels.begin(), labels.end(), sfz::CCNamePair(511, "Last")) == 1);
+  AUD_CHECK(std::none_of(labels.begin(), labels.end(),
+                         [](const sfz::CCNamePair& label) { return label.first >= 512; }));
 }

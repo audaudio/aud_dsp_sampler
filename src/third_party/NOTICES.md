@@ -10,7 +10,8 @@ so in a "Modified by Audanika" note below its license header, and so do the
 three decoders of st_audiofile that ticket 28 changed: `dr_flac.h`,
 `dr_mp3.h` and `stb_vorbis.c` (see the audit of the shared state below),
 and the six oversampling filters of hiir that tell whether they are at rest
-(see the hot spots of the audio thread below).
+and settle a memory within a floor (see the hot spots of the audio thread
+and the fixes of release 0.3.2 below).
 `fs_std_impl.cpp` is the one-line translation unit sfizz's build generates
 for the filesystem implementation. Audanika's code in the fork - the
 changes the notes name and the new files `sfizz/src/sfizz/RbjFilters.hpp`
@@ -137,11 +138,13 @@ Changed for ticket 28, after a profile of an app on an Android tablet whose
 four sampler nodes played dense chords: a third of the sampler's time went
 to the flush of the MIDI state, and 17 to 25 % of the audio thread to
 `log10f`, `powf` and `exp2f` of libm, called for every sample. The output
-stays the same, bit for bit; the native tests compare the changed code with
-the original on random event streams, on signals for the compressor and on
+stays the same, bit for bit, but for the rest of the compressor of release
+0.3.2 (below); the native tests compare the changed code with the original
+on random event streams, on signals for the compressor and the gain and on
 the render of an app's instrument (`test/native/sfizz_midi_state_test.cpp`,
-`sfizz_compressor_test.cpp`, `sfizz_app_render_test.cpp`), and
-`node scripts/test-native.js --bench` measures it against release 0.3.0.
+`sfizz_compressor_test.cpp`, `sfizz_gain_test.cpp`,
+`sfizz_app_render_test.cpp`), and `node scripts/test-native.js --bench`
+measures it against release 0.3.0.
 
 - `sfizz/src/sfizz/MidiState.h`, `MidiState.cpp`: `flushEvents()` flushes
   only the event vectors that received an event since the last flush, which
@@ -175,3 +178,40 @@ the render of an app's instrument (`test/native/sfizz_midi_state_test.cpp`,
   `Upsampler2xSse.h`, `Downsampler2xFpu.h`, `Downsampler2xNeon.h`,
   `Downsampler2xSse.h`: `is_cleared()` tells whether the memory of the filter
   is silent.
+
+## The fixes of release 0.3.2
+
+Changed for ticket 28 after the review of release 0.3.1:
+
+- `sfizz/src/sfizz/effects/gen/compressor.hxx` (STK-4.3 like the rest of the
+  generated code), `sfizz/src/sfizz/effects/Compressor.cpp` and the six
+  oversampling filters of hiir, `Upsampler2xFpu.h`, `Upsampler2xNeon.h`,
+  `Upsampler2xSse.h`, `Downsampler2xFpu.h`, `Downsampler2xNeon.h` and
+  `Downsampler2xSse.h` in `sfizz/src/external/hiir/hiir`: the compressor
+  comes to rest about a second after a loud sound, where it waited until its
+  detector fell below the smallest float - 4.4 s for an app's limiter, up
+  to 17.9 s with a release of 0.2 s. After a silent block `settle()` sets a
+  level of at most 1e-9, a gain within 1e-7 dB of 0 dB and a filter memory
+  within 1e-9 of 0 to exactly 0; a block with sound keeps its state as it
+  is. A silent block whose filters are silent and whose level lies at or
+  below the threshold passes as silence while the detectors decay as their
+  loop would, value for value (`decaySilence()`). The output moves by at
+  most 1.2e-7, within the 1e-5 of decision sampler-007; the compressor test
+  compares it with the original within 1e-6 (`sfizz_compressor_test.cpp`,
+  `sfizz_hiir_test.cpp`).
+- `sfizz/src/sfizz/effects/Gain.h`, `Gain.cpp`: the gain is converted to
+  linear once, when the effect is made, instead of in every block and in
+  every question whether it is at rest; the same factor.
+- `sfizz/src/sfizz/MidiState.h`, `MidiState.cpp`: `ccEvent()` ignores a
+  controller number out of range, as `polyAftertouchEvent()` ignores a note
+  number, instead of writing behind the event vectors and the list of those
+  to flush, and `markForFlush()` asserts that its slot exists.
+- `sfizz/src/sfizz/Synth.cpp`: `set_ccN`, `set_hdccN` and `label_ccN` take
+  the controllers 0 to 511 only; `set_cc512` and `set_hdcc512` wrote behind
+  the default values and the event vectors of the controllers.
+- `sfizz/src/sfizz/Region.cpp`: `delay_onccN`, `offset_onccN`, `end_onccN`,
+  `loop_start_onccN`, `loop_end_onccN`, `lfoX_delay_onccN` and
+  `lfoX_fade_onccN` take the controllers 0 to 511 only, like every other
+  opcode of a controller; with 512 a voice read behind the event vectors of
+  the controllers (`sfizz_midi_state_test.cpp`, `sfizz_synth_test.cpp`,
+  `sfizz_region_test.cpp`).

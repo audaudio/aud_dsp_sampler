@@ -13,6 +13,13 @@
 // effect, idle nodes too. The oversampling filters and the detectors of
 // both channels run in one loop each, on state in registers, with the
 // operations of the original per sample: the output is the same.
+// Release 0.3.2: after a silent block the detectors settle a level below
+// 1e-9 and a gain within 1e-7 dB of 0 dB to 0, and the oversampling filters
+// a memory below 1e-9, so that the compressor comes to rest about a second
+// after a loud sound instead of after seconds; a block with sound keeps its
+// state as it is. A silent block whose filters are silent and whose level
+// lies below the threshold passes as silence while only the detectors
+// decay, as they would in the loop. The output moves by less than 1e-6.
 
 /*
    Note(jpc): implementation status
@@ -72,6 +79,22 @@ void downsampleStereo(Downsampler (&downsamplers)[sfz::EffectChannels], float* c
     downsamplers[1] = right;
 }
 
+// The floors below which a silent block settles the state to 0 (Audanika,
+// ticket 28): the linear level of the detectors and the memory of the
+// oversampling filters, and the gain in dB.
+constexpr float kLevelFloor = 1e-9f;
+constexpr float kFilterFloor = 1e-9f;
+constexpr float kGainFloorDb = 1e-7f;
+
+// Copies the input to the output, unless they are the same buffers.
+void passThrough(const float* const inputs[], float* const outputs[], unsigned nframes)
+{
+    for (unsigned c = 0; c < sfz::EffectChannels; ++c) {
+        if (outputs[c] != inputs[c])
+            std::memcpy(outputs[c], inputs[c], nframes * sizeof(float));
+    }
+}
+
 } // namespace
 
 namespace sfz {
@@ -85,7 +108,60 @@ namespace fx {
         AudioBuffer<float, 2> _gain2x { 2, _oversampling * config::defaultSamplesPerBlock };
         hiir::Downsampler2x<12> _downsampler2x[EffectChannels];
         hiir::Upsampler2x<12> _upsampler2x[EffectChannels];
+
+        // Whether the memory of every oversampling filter is silent.
+        bool filtersCleared() const;
+        // Decays the detectors the stereo link uses by `count` silent samples
+        // of the oversampled rate, as the loop would, if the filters are
+        // silent and every detector can (faustCompressor::canDecaySilence);
+        // otherwise returns false and changes nothing (Audanika, ticket 28).
+        bool decaySilence(int count);
+        // Sets the state that lies below the floors to 0 (Audanika, ticket
+        // 28).
+        void settle();
     };
+
+    bool Compressor::Impl::filtersCleared() const
+    {
+        for (unsigned c = 0; c < EffectChannels; ++c) {
+            if (!_upsampler2x[c].is_cleared() || !_downsampler2x[c].is_cleared())
+                return false;
+        }
+        return true;
+    }
+
+    bool Compressor::Impl::decaySilence(int count)
+    {
+        if (!std::isfinite(_inputGain) || !filtersCleared())
+            return false;
+
+        // The stereo link feeds the first detector only.
+        const unsigned used = _stlink ? 1 : EffectChannels;
+        faustCompressor::Slow coefficients[EffectChannels];
+        for (unsigned c = 0; c < used; ++c) {
+            coefficients[c] = _compressor[c].slow();
+            if (!_compressor[c].canDecaySilence(coefficients[c]))
+                return false;
+        }
+
+        if (used == 1)
+            _compressor[0].decaySilence(coefficients[0], count);
+        else
+            faustCompressor::decaySilenceTwo(_compressor[0], coefficients[0],
+                _compressor[1], coefficients[1], count);
+        return true;
+    }
+
+    void Compressor::Impl::settle()
+    {
+        for (faustCompressor& comp : _compressor)
+            comp.settle(kLevelFloor, kGainFloorDb);
+
+        for (unsigned c = 0; c < EffectChannels; ++c) {
+            _upsampler2x[c].settle(kFilterFloor);
+            _downsampler2x[c].settle(kFilterFloor);
+        }
+    }
 
     Compressor::Compressor()
         : _impl(new Impl)
@@ -140,12 +216,7 @@ namespace fx {
                 return false;
         }
 
-        for (unsigned c = 0; c < EffectChannels; ++c) {
-            if (!impl._upsampler2x[c].is_cleared() || !impl._downsampler2x[c].is_cleared())
-                return false;
-        }
-
-        return true;
+        return impl.filtersCleared();
     }
 
     void Compressor::process(const float* const inputs[], float* const outputs[], unsigned nframes)
@@ -153,11 +224,17 @@ namespace fx {
         Impl& impl = *_impl;
 
         // Silence in, at rest: the output is silent, the state stays.
-        if (isSilent(inputs, nframes) && isAtRest()) {
-            for (unsigned c = 0; c < EffectChannels; ++c) {
-                if (outputs[c] != inputs[c])
-                    std::memcpy(outputs[c], inputs[c], nframes * sizeof(float));
-            }
+        const bool silent = isSilent(inputs, nframes);
+        if (silent && isAtRest()) {
+            passThrough(inputs, outputs, nframes);
+            return;
+        }
+
+        // Silence in, the filters silent, the level below the threshold: the
+        // output is silent, and the detectors decay as in the loop.
+        if (silent && impl.decaySilence(_oversampling * nframes)) {
+            passThrough(inputs, outputs, nframes);
+            impl.settle();
             return;
         }
 
@@ -208,6 +285,11 @@ namespace fx {
         }
 
         downsampleStereo(impl._downsampler2x, outputs, left2x.data(), right2x.data(), nframes);
+
+        // After silence, what is left below the floors goes to 0; a block
+        // with sound keeps its state as the original does.
+        if (silent)
+            impl.settle();
     }
 
     std::unique_ptr<Effect> Compressor::makeInstance(absl::Span<const Opcode> members)

@@ -22,6 +22,13 @@ Compilation options: -lang cpp -inpl -es 1 -scal -ftz 0
 // bit for bit: every sample takes the same operations in the same order.
 // isAtRest() tells whether silence passes as silence and leaves the state
 // as it is.
+// Release 0.3.2: settle() sets a level of at most 1e-9 and a gain of at most
+// 1e-7 dB to exactly 0, so that a compressor comes to rest about a second
+// after a loud sound instead of when its level falls below the smallest
+// float; the output moves by less than 1e-6. decaySilence() runs compute()
+// on a silent input while the level stays at or below fSkipBelow, where the
+// level and the gain only decay: the same state, bit for bit, without the
+// gains, which multiply silence.
 
 #ifndef  __faustCompressor_H__
 #define  __faustCompressor_H__
@@ -242,6 +249,73 @@ class faustCompressor {
         return fRec2[0] == 0.0f && fRec2[1] == 0.0f && fRec1[0] == 0.0f && fRec1[1] == 0.0f &&
             fRec0[0] == 0.0f && fRec0[1] == 0.0f && float(fHslider0) >= 0.0f &&
             float(fHslider3) > -std::numeric_limits<float>::infinity();
+    }
+
+    // Sets a level of at most levelFloor and a gain within gainFloorDb of
+    // 0 dB to exactly 0, the state of rest (Audanika, ticket 28). The
+    // level falls with the release, below 1e-9 a second after a loud sound
+    // with a release of 50 ms, but reaches 0 only below the smallest float.
+    void settle(float levelFloor, float gainFloorDb) {
+        if (fRec2[1] >= 0.0f && fRec2[1] <= levelFloor) {
+            fRec2[0] = fRec2[1] = fRec1[0] = fRec1[1] = 0.0f;
+        }
+        if (std::fabs(fRec0[1]) <= gainFloorDb) {
+            fRec0[0] = fRec0[1] = 0.0f;
+        }
+    }
+
+    // Whether decaySilence() gives the state compute() gives on a silent
+    // input, with the coefficients `k` of slow(): the level lies at or below
+    // fSkipBelow, where the term of the threshold is 0, and falls; the
+    // attack and the release are not negative, so that every coefficient
+    // lies in [0, 1]; the gain is finite and small enough that the gains of
+    // the samples, which multiply the silence, are finite (Audanika, ticket
+    // 28).
+    bool canDecaySilence(const Slow& k) const {
+        const State s = state();
+        auto unit = [](float c) { return c >= 0.0f && c <= 1.0f; };
+        return s.fRec2 >= 0.0f && s.fRec2 <= k.fSkipBelow && unit(k.fSlow3) && unit(k.fSlow6) &&
+            unit(k.fSlow9) && std::isfinite(s.fRec0) && s.fRec0 < 700.0f;
+    }
+
+    // compute() of `count` silent samples, if canDecaySilence(k), without
+    // the gains: with the input 0 its loop multiplies the level by fSlow9
+    // and the gain by fSlow3, operation by operation, and leaves the rest
+    // as it is; only the sign of a zero may differ (Audanika, ticket 28).
+    void decaySilence(const Slow& k, int count) {
+        State s = state();
+        for (int i = 0; (i < count); i = (i + 1)) {
+            decayTick(k, s);
+        }
+        if (count > 0) {
+            setState(s);
+        }
+    }
+
+    // decaySilence() of two compressors in one loop, so that their chains
+    // overlap, as in computeTwo() (Audanika, ticket 28).
+    static void decaySilenceTwo(faustCompressor& a, const Slow& ka, faustCompressor& b, const Slow& kb, int count) {
+        State sa = a.state();
+        State sb = b.state();
+        for (int i = 0; (i < count); i = (i + 1)) {
+            decayTick(ka, sa);
+            decayTick(kb, sb);
+        }
+        if (count > 0) {
+            a.setState(sa);
+            b.setState(sb);
+        }
+    }
+
+ private:
+    // One silent sample of the loop of compute() while the term of the
+    // threshold is 0: fRec2 * fTemp2 + 0 * (1 - fTemp2) is fRec2 * fSlow9,
+    // also for a level of 0, and fSlow4 * (0 * fSlow11) adds a zero to the
+    // decayed gain.
+    static void decayTick(const Slow& k, State& s) {
+        s.fRec2 = s.fRec2 * k.fSlow9;
+        s.fRec1 = s.fRec2;
+        s.fRec0 = k.fSlow3 * s.fRec0;
     }
 
 	//[End:class]

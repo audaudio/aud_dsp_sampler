@@ -6,8 +6,9 @@
 
 // The micro-benchmark of ticket 28: what the hot spots of an app's audio
 // thread cost per call - the flush of the MIDI state, the compressor and
-// the gain of the app's limiter on 180 frames, an idle synth and four synths
-// of which three play dense chords. `node scripts/test-native.js --bench`
+// the gain of the app's limiter on 180 frames, also in the two seconds
+// after a loud tone, an idle synth and four synths of which three play
+// dense chords. `node scripts/test-native.js --bench`
 // builds it twice, at -O3 like the build hook, with the fork of a release
 // before the change and with the fork of now, and prints the table. Only the
 // public API of sfizz, so that both compile it.
@@ -105,6 +106,40 @@ double compressorNs(float amplitude)
     });
 }
 
+// The blocks of the two seconds from a loud tone on: a tenth of a second of
+// a stereo sine at twice full scale through the app's limiter, then
+// silence, in which the limiter comes to rest; the mean per block.
+double compressorAfterToneNs()
+{
+    constexpr int kFrames = sfizz_app::kBlockFrames;
+    std::unique_ptr<sfz::Effect> effect = sfz::fx::Compressor::makeInstance(limiterOpcodes());
+    effect->setSampleRate(sfizz_app::kSampleRate);
+    effect->setSamplesPerBlock(kFrames);
+    const int toneBlocks = static_cast<int>(0.1 * sfizz_app::kSampleRate) / kFrames;
+    const int blocks = static_cast<int>(2.0 * sfizz_app::kSampleRate) / kFrames;
+    std::vector<float> tone[2];
+    for (int c = 0; c < 2; ++c) {
+        tone[c].resize(toneBlocks * kFrames);
+        for (int i = 0; i < toneBlocks * kFrames; ++i)
+            tone[c][i] = 2.0f * static_cast<float>(std::sin(2 * M_PI * 240.0 * (i + c * 10) / sfizz_app::kSampleRate));
+    }
+    const std::vector<float> silence(kFrames, 0.0f);
+    std::vector<float> out[2] = { std::vector<float>(kFrames), std::vector<float>(kFrames) };
+    float* outputs[2] = { out[0].data(), out[1].data() };
+    int block = 0;
+    ScopedFTZ ftz;
+    return nsPerCall([&] {
+        const bool sounding = block < toneBlocks;
+        const float* inputs[2] = {
+            sounding ? tone[0].data() + block * kFrames : silence.data(),
+            sounding ? tone[1].data() + block * kFrames : silence.data(),
+        };
+        effect->process(inputs, outputs, kFrames);
+        block = (block + 1) % blocks;
+        sink = sink + out[0][7];
+    });
+}
+
 double gainNs()
 {
     constexpr int kFrames = sfizz_app::kBlockFrames;
@@ -194,6 +229,7 @@ int main(int argc, char** argv)
     report("compressor 180 frames, silent", compressorNs(0.0f));
     report("compressor 180 frames, below the threshold", compressorNs(0.3f));
     report("compressor 180 frames, over the threshold", compressorNs(2.0f));
+    report("compressor 180 frames, the 2 s from a loud tone on", compressorAfterToneNs());
     report("gain effect 180 frames", gainNs());
 
     // Synths with the app's instrument.

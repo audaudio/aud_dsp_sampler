@@ -10,12 +10,14 @@
 // every block. Random streams of events, resets and flushes drive the state
 // and a reference that keeps the original algorithm; after every block
 // every event vector, every value a voice asks for and the modulations the
-// controllers build from the events are the same, bit for bit.
+// controllers build from the events are the same, bit for bit. A controller
+// number out of range changes nothing (release 0.3.2).
 
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -322,4 +324,30 @@ AUD_TEST(sfizz_midi_state_flushes_every_vector_an_event_reached) {
     AUD_CHECK(single(state.getCCEvents(7), 1.0f));
     state.flushEvents();
     AUD_CHECK(single(state.getCCEvents(7), 1.0f));
+}
+
+// ############################################################################
+// Controller numbers out of range
+
+AUD_TEST(sfizz_midi_state_ignores_a_cc_number_out_of_range) {
+    // Numbers below 0 and from 512 on, e.g. of a host or a message, change
+    // no event vector and leave nothing to flush; the event in range beside
+    // them stays and flushes.
+    sfz::MidiState state;
+    state.setSamplesPerBlock(256);
+    OriginalEvents original;
+    state.ccEvent(10, 511, 0.5f);
+    original.ccEvent(10, 511, 0.5f);
+    const int outOfRange[] = { -1, sfz::config::numCCs, sfz::config::numCCs + 1,
+        std::numeric_limits<int>::min(), std::numeric_limits<int>::max() };
+    for (int cc : outOfRange)
+        state.ccEvent(20, cc, 0.75f);
+    AUD_CHECK(differingVectors(state, original) == 0);
+    state.flushEvents();
+    original.flushEvents();
+    AUD_CHECK(differingVectors(state, original) == 0);
+    for (int cc : outOfRange)
+        state.ccEvent(0, cc, 1.0f);
+    state.flushEvents();
+    AUD_CHECK(differingVectors(state, original) == 0);
 }

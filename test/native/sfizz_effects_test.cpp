@@ -10,6 +10,9 @@
 // every effect processes them as it processes whole blocks, without a
 // failed check that writes to stderr on the audio thread. Synths with a
 // distortion load on several threads at once without a race (ticket 28).
+// The bus of the effects (src/sfizz/Effects.cpp) skips its effects while
+// its input is silent and they are at rest, and gives what they give
+// (ticket 28).
 //
 // The instruments play sfizz's sine generator, so no file enters the store.
 
@@ -24,7 +27,12 @@
 #include <vector>
 
 #include "AudioSpan.h"
+#include "Effects.h"
+#include "Opcode.h"
+#include "ScopedFTZ.h"
 #include "Synth.h"
+#include "effects/Compressor.h"
+#include "effects/Gain.h"
 
 #include "aud_test.hpp"
 
@@ -88,6 +96,60 @@ const std::vector<uint32_t> kShortBlocks = {1, 17, 64, 100, 255, 256, 3};
 const std::vector<uint32_t> kWholeBlocks = {kMaxBlock};
 
 const char* const kSine = "<region> sample=*sine\n";
+
+// An effect that counts the blocks it processes and hands everything to
+// the effect it wraps.
+class CountedEffect : public sfz::Effect {
+ public:
+  CountedEffect(std::unique_ptr<sfz::Effect> inner, int& blocks)
+      : inner_(std::move(inner)), blocks_(blocks) {}
+
+  void setSampleRate(double sampleRate) override { inner_->setSampleRate(sampleRate); }
+  void setSamplesPerBlock(int samplesPerBlock) override {
+    inner_->setSamplesPerBlock(samplesPerBlock);
+  }
+  void clear() override { inner_->clear(); }
+  void process(const float* const inputs[], float* const outputs[], unsigned nframes) override {
+    blocks_ += 1;
+    inner_->process(inputs, outputs, nframes);
+  }
+  bool isAtRest() const override { return inner_->isAtRest(); }
+
+ private:
+  std::unique_ptr<sfz::Effect> inner_;
+  int& blocks_;
+};
+
+// An app's output stage: the limiter, then a gain that undoes sfizz's
+// volume of -7.35 dB, made from their opcodes and set up for kMaxBlock.
+std::unique_ptr<sfz::Effect> makeLimiter() {
+  const std::vector<sfz::Opcode> opcodes = {
+      {"type", "comp"},       {"comp_attack", "0"},       {"comp_release", "0.05"},
+      {"comp_ratio", "50"},   {"comp_threshold", "-0.5"}, {"comp_stlink", "off"},
+  };
+  return sfz::fx::Compressor::makeInstance(opcodes);
+}
+
+std::unique_ptr<sfz::Effect> makeMakeUpGain() {
+  const std::vector<sfz::Opcode> opcodes = {{"type", "gain"}, {"gain", "7.35"}};
+  return sfz::fx::Gain::makeInstance(opcodes);
+}
+
+void setUp(sfz::Effect& effect) {
+  effect.setSampleRate(48000);
+  effect.setSamplesPerBlock(kMaxBlock);
+}
+
+// Stereo tones of `amplitude`, or silence, appended to `left` and `right`.
+void appendTone(std::vector<float>& left, std::vector<float>& right, size_t frames,
+                float amplitude) {
+  const size_t start = left.size();
+  for (size_t i = 0; i < frames; ++i) {
+    const double phase = 2 * M_PI * 220 * static_cast<double>(start + i) / 48000;
+    left.push_back(amplitude * static_cast<float>(std::sin(phase)));
+    right.push_back(amplitude * static_cast<float>(std::sin(phase * 1.01)));
+  }
+}
 
 }  // namespace
 
@@ -157,6 +219,81 @@ AUD_TEST(sfizz_effects_link_the_channels_on_every_frame) {
     const Render shortBlocks = render(text, kShortBlocks);
     AUD_CHECK(differenceOf(whole, shortBlocks) < 1e-6f);
   }
+}
+
+// ############################################################################
+// The bus
+
+AUD_TEST(sfizz_effects_bus_skips_silent_effects_at_rest) {
+  // A tone, pauses long enough for the limiter to come to rest, and blocks
+  // of nothing at all or of the zeros a voice added: the bus skips its
+  // effects only where they would give silence, and gives what they give
+  // when they process every block, value for value.
+  int processed = 0;
+  sfz::EffectBus bus;
+  bus.addEffect(std::unique_ptr<sfz::Effect>(new CountedEffect(makeLimiter(), processed)));
+  bus.addEffect(makeMakeUpGain());
+  bus.setGainToMain(1.0f);
+  bus.setGainToMix(0.0f);
+  bus.setSampleRate(48000);
+  bus.setSamplesPerBlock(kMaxBlock);
+  std::unique_ptr<sfz::Effect> limiter = makeLimiter();
+  std::unique_ptr<sfz::Effect> gain = makeMakeUpGain();
+  setUp(*limiter);
+  setUp(*gain);
+
+  std::vector<float> left;
+  std::vector<float> right;
+  appendTone(left, right, 4800, 0.0f);
+  appendTone(left, right, 9600, 2.5f);
+  appendTone(left, right, 3 * 48000, 0.0f);
+  appendTone(left, right, 4800, 0.3f);
+  appendTone(left, right, 3 * 48000, 0.0f);
+
+  const std::vector<uint32_t> blocks = {180, 1, 17, 64, 256, 3, 180, 100};
+  std::vector<float> in[2] = {std::vector<float>(kMaxBlock), std::vector<float>(kMaxBlock)};
+  std::vector<float> main[2] = {std::vector<float>(kMaxBlock), std::vector<float>(kMaxBlock)};
+  std::vector<float> mix[2] = {std::vector<float>(kMaxBlock), std::vector<float>(kMaxBlock)};
+  std::vector<float> expected[2] = {std::vector<float>(kMaxBlock),
+                                    std::vector<float>(kMaxBlock)};
+  size_t differing = 0;
+  int total = 0;
+  for (size_t done = 0; done < left.size(); total += 1) {
+    const uint32_t frames =
+        std::min<uint32_t>(blocks[total % blocks.size()], static_cast<uint32_t>(left.size() - done));
+    bool silent = true;
+    for (int c = 0; c < 2; ++c) {
+      const std::vector<float>& source = c == 0 ? left : right;
+      std::copy(source.begin() + done, source.begin() + done + frames, in[c].begin());
+      for (uint32_t i = 0; i < frames; ++i) silent = silent && in[c][i] == 0.0f;
+      std::fill(main[c].begin(), main[c].end(), 0.0f);
+      std::fill(mix[c].begin(), mix[c].end(), 0.0f);
+    }
+    const float* inputs[2] = {in[0].data(), in[1].data()};
+    float* mainPointers[2] = {main[0].data(), main[1].data()};
+    float* mixPointers[2] = {mix[0].data(), mix[1].data()};
+    float* expectedPointers[2] = {expected[0].data(), expected[1].data()};
+    {
+      ScopedFTZ ftz;
+      bus.clearInputs(frames);
+      // A silent block reaches the bus as no voice at all, or as the zeros
+      // of a voice that ended.
+      if (!silent || total % 3 == 0) bus.addToInputs(inputs, 1.0f, frames);
+      bus.process(frames);
+      bus.mixOutputsTo(mainPointers, mixPointers, frames);
+      limiter->process(inputs, expectedPointers, frames);
+      gain->process(expectedPointers, expectedPointers, frames);
+    }
+    for (int c = 0; c < 2; ++c) {
+      for (uint32_t i = 0; i < frames; ++i) differing += main[c][i] == expected[c][i] ? 0 : 1;
+    }
+    done += frames;
+  }
+  AUD_CHECK(differing == 0);
+  // The limiter ran on the tones and until it came to rest, not in the
+  // pauses after that.
+  AUD_CHECK(processed > 0);
+  AUD_CHECK(processed < total / 2);
 }
 
 // ############################################################################

@@ -9,7 +9,9 @@
 // the last flush: every function that inserts an event marks its vector, and
 // the resets, which leave each vector they touch at one event at delay 0,
 // need no flush. The list of marked vectors has a fixed size; nothing
-// allocates on the audio thread.
+// allocates on the audio thread. Release 0.3.2: ccEvent() ignores a
+// controller number out of range, as polyAftertouchEvent() ignores a note
+// number, instead of writing behind the event vectors and the list.
 
 #include "MidiState.h"
 #include "utility/Macros.h"
@@ -228,7 +230,9 @@ float sfz::MidiState::getPolyAftertouch(int noteNumber) const noexcept
 
 void sfz::MidiState::ccEvent(int delay, int ccNumber, float ccValue) noexcept
 {
-    ASSERT(ccNumber >= 0 && ccNumber < config::numCCs);
+    if (ccNumber < 0 || ccNumber >= config::numCCs)
+        return;
+
     markForFlush(ccNumber);
     insertEventInVector(ccEvents[ccNumber], delay, ccValue);
 }
