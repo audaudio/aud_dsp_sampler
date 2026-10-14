@@ -18,6 +18,8 @@
 // without regions loads and plays nothing, e.g. a text with only a comment,
 // as an empty text does; a load without regions fails only when the file
 // cannot be read or the parser reports an error.
+// Ticket 29: countVoices() and stealVoices() serve a voice limit of the
+// host through the voice manager.
 
 #include "SynthPrivate.h"
 #include "VirtualFile.h"
@@ -1150,6 +1152,18 @@ std::vector<const Voice*> Synth::getActiveVoices() const noexcept
 {
     Impl& impl = *impl_;
     return impl.voiceManager_.getActiveVoices();
+}
+
+VoiceCount Synth::countVoices() const noexcept
+{
+    Impl& impl = *impl_;
+    return impl.voiceManager_.countVoices();
+}
+
+VoiceCount Synth::stealVoices(int count, int fadeFrames) noexcept
+{
+    Impl& impl = *impl_;
+    return impl.voiceManager_.stealVoices(count, fadeFrames);
 }
 
 void Synth::setSamplesPerBlock(int samplesPerBlock) noexcept

@@ -857,6 +857,161 @@ AUD_TEST(tunes_with_a_scala_file) {
 }
 
 // ############################################################################
+// The voice limit (ticket 29)
+
+namespace {
+
+// Plays `count` notes on the node, every second key from `first` on, one per
+// live block, so that each is older than the next.
+void playNotes(Fixture& f, int32_t node, uint32_t count, uint32_t first = 60) {
+  for (uint32_t i = 0; i < count; ++i) {
+    f.noteOn(node, first + 2 * i);
+    f.renderLive(256);
+  }
+}
+
+}  // namespace
+
+AUD_TEST(max_voices_lowers_the_voices_at_the_next_block_without_a_reload) {
+  VoiceBudgetScope scope(0, 4);
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.renderLive(256);
+  playNotes(f, node, 5);
+  AUD_CHECK(voiceStats().sounding == 5);
+  const uint64_t stolen = voiceStats().stolen;
+  const size_t loads = f.notificationsOf(AUD_NOTIFY_LOAD).size();
+  // 6 voices minus the reserve of 4: the two newest notes sound on.
+  f.param(node, AUD_SFZ_PARAM_MAX_VOICES, 6);
+  f.renderLive(256);
+  AUD_CHECK(voiceStats().sounding == 2);
+  AUD_CHECK(voiceStats().stolen == stolen + 3);
+  // No load and no swap: the voices that are left play on in the synth
+  // that plays, and the stolen ones are gone after their fade.
+  f.renderLive(1024);
+  waitTasks();
+  f.renderLive(256);
+  AUD_CHECK(voiceStats().sounding == 2);
+  AUD_CHECK(f.notificationsOf(AUD_NOTIFY_LOAD).size() == loads);
+  AUD_CHECK(voiceNotes(f, node) == (std::vector<int64_t>{66, 68}));
+  // A raised limit lets new notes sound again.
+  f.param(node, AUD_SFZ_PARAM_MAX_VOICES, 256);
+  playNotes(f, node, 3, 80);
+  AUD_CHECK(voiceStats().sounding == 5);
+  AUD_CHECK(voiceStats().stolen == stolen + 3);
+}
+
+AUD_TEST(a_stolen_voice_fades_out_without_a_step) {
+  VoiceBudgetScope scope(0, 0);
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.param(node, AUD_SFZ_PARAM_MAX_VOICES, 1);
+  f.renderLive(256);
+  f.noteOn(node, 69);
+  f.renderLive(4800);
+  // The block that starts the octave steals the voice of 69 at its start.
+  const size_t steal = f.left.size();
+  f.noteOn(node, 81);
+  f.renderLive(4800);
+  // A cut would step by up to kLevel; the fade steps no more than the two
+  // sines themselves.
+  AUD_CHECK(largestStep(f.left, steal - 256, steal + 1024) <
+            1.2f * static_cast<float>(2 * kPi * (375 + 750) / kRate) * kLevel);
+  AUD_CHECK(peak(f.left, steal, steal + 48) > 0.25f * kLevel);
+  // After 10 ms only the octave sounds, and the stolen voice is free.
+  AUD_CHECK_NEAR(frequencyOf(f.left, steal + 480, f.left.size()), 750.0, 1.0);
+  AUD_CHECK_NEAR(peak(f.left, steal + 480, f.left.size()), kLevel, 0.002);
+  AUD_CHECK(voiceNotes(f, node) == std::vector<int64_t>{81});
+}
+
+AUD_TEST(max_voices_steals_released_voices_first_and_the_oldest_first) {
+  VoiceBudgetScope scope(0, 0);
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  // Released voices sound for two seconds.
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"),
+                          loopInstrument(folder, "a", 375, "ampeg_release=2")));
+  f.renderLive(256);
+  playNotes(f, node, 4);
+  f.noteOff(node, 62);
+  f.noteOff(node, 66);
+  f.renderLive(256);
+  AUD_CHECK(voiceStats().released == 2);
+  // Each lower limit takes one voice: the older released one, the younger
+  // released one, then the oldest held one.
+  const std::vector<std::vector<int64_t>> left = {{60, 64, 66}, {60, 64}, {64}};
+  for (size_t i = 0; i < left.size(); ++i) {
+    f.param(node, AUD_SFZ_PARAM_MAX_VOICES, static_cast<float>(3 - i));
+    f.renderLive(1024);
+    AUD_CHECK(voiceNotes(f, node) == left[i]);
+  }
+}
+
+AUD_TEST(max_voices_steals_the_layers_of_a_note_together) {
+  VoiceBudgetScope scope(0, 0);
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  // Two layers on every key.
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"),
+                          loopInstrument(folder, "a", 375) + loopInstrument(folder, "b", 750)));
+  f.renderLive(256);
+  playNotes(f, node, 2);
+  AUD_CHECK(voiceStats().sounding == 4);
+  const uint64_t stolen = voiceStats().stolen;
+  // One voice too many: both layers of the older note go.
+  f.param(node, AUD_SFZ_PARAM_MAX_VOICES, 3);
+  f.renderLive(256);
+  AUD_CHECK(voiceStats().sounding == 2);
+  AUD_CHECK(voiceStats().stolen == stolen + 2);
+  f.renderLive(1024);
+  AUD_CHECK(voiceNotes(f, node) == (std::vector<int64_t>{62, 62}));
+}
+
+AUD_TEST(max_voices_holds_offline_where_no_voice_counts) {
+  // A budget of one voice holds for live renders only; max_voices holds
+  // offline too. An offline render publishes and counts nothing.
+  VoiceBudgetScope scope(1, 0);
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  const AudSfzVoiceStats before = voiceStats();
+  f.renderOffline(256);
+  for (uint32_t note : {60, 62, 64, 66}) f.noteOn(node, note);
+  f.renderOffline(1024);
+  AUD_CHECK(voiceNotes(f, node) == (std::vector<int64_t>{60, 62, 64, 66}));
+  f.param(node, AUD_SFZ_PARAM_MAX_VOICES, 2);
+  f.renderOffline(1024);
+  AUD_CHECK(voiceNotes(f, node).size() == 2);
+  const AudSfzVoiceStats after = voiceStats();
+  AUD_CHECK(after.sounding == before.sounding && after.stolen == before.stolen &&
+            after.voice_frames == before.voice_frames);
+}
+
+AUD_TEST(max_voices_rounds_to_its_step) {
+  VoiceBudgetScope scope(0, 0);
+  Fixture f;
+  TempFolder folder;
+  const int32_t node = f.sampler();
+  AUD_CHECK(f.loadAndWait(node, folder.file("a.sfz"), loopInstrument(folder, "a", 375)));
+  f.renderLive(256);
+  playNotes(f, node, 4);
+  // Automation may land next to a step; out of range it clamps to 1.
+  f.param(node, AUD_SFZ_PARAM_MAX_VOICES, 2.9999998f);
+  f.renderLive(256);
+  AUD_CHECK(voiceStats().sounding == 3);
+  f.param(node, AUD_SFZ_PARAM_MAX_VOICES, -5.0f);
+  f.renderLive(256);
+  AUD_CHECK(voiceStats().sounding == 1);
+}
+
+// ############################################################################
 // Events
 
 AUD_TEST(plays_midi_2_and_reports_per_note_controllers_it_cannot_play) {

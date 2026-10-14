@@ -19,14 +19,6 @@ import 'dart:ffi' as ffi;
 @ffi.Native<ffi.Int32 Function(ffi.Pointer<core.AudHostApi>)>()
 external int aud_dsp_sampler_register(ffi.Pointer<core.AudHostApi> host);
 
-/// [any thread] The bytes the sample store of the process holds.
-@ffi.Native<ffi.Int64 Function()>()
-external int aud_dsp_sampler_store_bytes();
-
-/// [any thread] The sample files the store of the process keeps.
-@ffi.Native<ffi.Int32 Function()>()
-external int aud_dsp_sampler_store_files();
-
 /// [control] Gives the sampler the assets of an Android app, an AAssetManager*:
 /// a path "apk:/<path>" in sfz_file, scala_file or sfz_virtual_path, and
 /// inside an SFZ file, then names an asset of the APK, read in place. The
@@ -38,6 +30,40 @@ external int aud_dsp_sampler_store_files();
 external int aud_dsp_sampler_set_android_assets(
   ffi.Pointer<ffi.Void> asset_manager,
 );
+
+/// [any thread] Sets the voice budget of the process: the voices that all
+/// sampler nodes of all graphs keep sounding together in live renders, minus
+/// the reserve; 0, the default, sets none, and a negative budget counts as 0.
+/// The nodes follow at the end of their next block.
+@ffi.Native<ffi.Void Function(ffi.Int32)>()
+external void aud_dsp_sampler_set_voice_budget(int voices);
+
+/// [any thread] Sets the free voices the budget and every max_voices keep
+/// below themselves, 0 to 16 (clamped); 4 by default.
+@ffi.Native<ffi.Void Function(ffi.Int32)>()
+external void aud_dsp_sampler_set_voice_reserve(int voices);
+
+/// [any thread] The bytes the sample store of the process holds.
+@ffi.Native<ffi.Int64 Function()>()
+external int aud_dsp_sampler_store_bytes();
+
+/// [any thread] The sample files the store of the process keeps.
+@ffi.Native<ffi.Int32 Function()>()
+external int aud_dsp_sampler_store_files();
+
+/// [any thread] The voice budget of the process; 0: none.
+@ffi.Native<ffi.Int32 Function()>()
+external int aud_dsp_sampler_voice_budget();
+
+/// [any thread] The free voices the budget and every max_voices keep.
+@ffi.Native<ffi.Int32 Function()>()
+external int aud_dsp_sampler_voice_reserve();
+
+/// [any thread] Reads the voices of the process into `out`, whose
+/// struct_size the caller sets; AUD_OK, or AUD_ERROR_INVALID_ARGUMENT for NULL
+/// or a struct_size below sizeof(AudSfzVoiceStats).
+@ffi.Native<ffi.Int32 Function(ffi.Pointer<AudSfzVoiceStats>)>()
+external int aud_dsp_sampler_voice_stats(ffi.Pointer<AudSfzVoiceStats> out);
 
 const String AUD_DSP_SAMPLER_SFZ_TYPE_ID = 'aud.sampler.sfz';
 
@@ -51,7 +77,9 @@ const int AUD_SFZ_KEY_TEXT = 2;
 
 const int AUD_SFZ_KEY_VIRTUAL_PATH = 1;
 
-const int AUD_SFZ_NUM_PARAMS = 6;
+const int AUD_SFZ_NUM_PARAMS = 7;
+
+const int AUD_SFZ_PARAM_MAX_VOICES = 6;
 
 const int AUD_SFZ_PARAM_OSCILLATOR_QUALITY = 3;
 
@@ -64,3 +92,59 @@ const int AUD_SFZ_PARAM_STRETCH_TUNING = 5;
 const int AUD_SFZ_PARAM_TUNING_FREQUENCY = 4;
 
 const int AUD_SFZ_PARAM_VOLUME = 0;
+
+/// The voices of the sampler nodes of the process (ticket 29): what
+/// aud_dsp_sampler_voice_stats reads. The counts are those the live nodes
+/// published at the end of their last block; the counters only grow.
+final class AudSfzVoiceStats extends ffi.Struct {
+  @ffi.Uint32()
+  external int struct_size;
+
+  /// voices; 0: no budget
+  @ffi.Int32()
+  external int budget;
+
+  /// free voices kept below each limit
+  @ffi.Int32()
+  external int reserve;
+
+  /// voices that sound, over the live nodes
+  @ffi.Int32()
+  external int sounding;
+
+  /// of them released: key and pedal up
+  @ffi.Int32()
+  external int released;
+
+  /// 0
+  @ffi.Uint32()
+  external int reserved;
+
+  /// voices stolen by max_voices and the budget
+  @ffi.Uint64()
+  external int stolen;
+
+  /// voices rendered times frames, of live blocks
+  @ffi.Uint64()
+  external int voice_frames;
+
+  static ffi.Pointer<AudSfzVoiceStats> $allocate(
+    ffi.Allocator $allocator, {
+    required int struct_size,
+    required int budget,
+    required int reserve,
+    required int sounding,
+    required int released,
+    required int reserved,
+    required int stolen,
+    required int voice_frames,
+  }) => $allocator<AudSfzVoiceStats>()
+    ..ref.struct_size = struct_size
+    ..ref.budget = budget
+    ..ref.reserve = reserve
+    ..ref.sounding = sounding
+    ..ref.released = released
+    ..ref.reserved = reserved
+    ..ref.stolen = stolen
+    ..ref.voice_frames = voice_frames;
+}

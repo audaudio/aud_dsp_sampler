@@ -11,11 +11,14 @@
 // from the values a host restored.
 // Ticket 27: an instrument without regions loads, unless its file cannot be
 // read or its parser reports an error; it plays nothing.
+// Ticket 29: countVoices() and stealVoices() let a host keep the voices
+// that sound below a limit of its own while the synth renders.
 
 #pragma once
 #include "AudioSpan.h"
 #include "Resources.h"
 #include "Messaging.h"
+#include "VoiceCount.h"
 #include "utility/NumericId.h"
 #include "utility/LeakDetector.h"
 #include <ghc/fs_std.hpp>
@@ -605,6 +608,34 @@ public:
      * @return std::vector<const Voice*>
      */
     std::vector<const Voice*> getActiveVoices() const noexcept;
+
+    /**
+     * @brief Count the voices (aud_dsp_sampler, ticket 29): those that sound
+     * - they play and are neither turned off nor stolen -, those of them
+     * that are released - key and pedals up - and all that the next block
+     * renders. Reads the active voices only and allocates nothing: call it
+     * between blocks on the audio thread.
+     *
+     * @return VoiceCount
+     */
+    VoiceCount countVoices() const noexcept;
+
+    /**
+     * @brief Steal sounding voices for a voice limit of the host
+     * (aud_dsp_sampler, ticket 29): at least `count` of them or all,
+     * released voices before held ones, the oldest first, each with its
+     * sister voices - the layers of its note -, which may take more. A
+     * stolen voice fades out linearly over `fadeFrames` from the next block
+     * on and is free at the end, without its release and without starting
+     * a release trigger. sfizz's own polyphony limits are not affected.
+     * Allocates nothing: call it between blocks on the audio thread.
+     *
+     * @param count the voices to steal
+     * @param fadeFrames the frames of the fade, at least 1
+     * @return VoiceCount the sounding voices stolen and the released ones
+     *         among them
+     */
+    VoiceCount stealVoices(int count, int fadeFrames) noexcept;
 
     /**
      * @brief Get the total number of voices in the synth (the polyphony)

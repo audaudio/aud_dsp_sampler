@@ -11,7 +11,8 @@
     "SFZ sampler node aud.sampler.sfz: loads on engine workers with ids, standby synth with a 5 ms crossfade, UMP of MIDI 1.0 and 2.0, sfizz's message API",
     "The audaudio fork of sfizz: one sample store per process, streams as engine tasks, trims to the sample cache budget, no allocation on the audio thread",
     "Node presets of SFZ instruments, an instrument of generated samples for tests, a link hook that drops the library of an app that does not use it",
-    "apk:/ paths: SFZ files and samples read in place from the assets of an Android app through AAssetManager and a file backend under sfizz"
+    "apk:/ paths: SFZ files and samples read in place from the assets of an Android app through AAssetManager and a file backend under sfizz",
+    "Voices: max_voices per node in real time and one voice budget per process with a reserve, kept by stealing released then oldest voices with 10 ms fades; voice stats for a governor"
   ],
   "interfaces": {
     "uses": {

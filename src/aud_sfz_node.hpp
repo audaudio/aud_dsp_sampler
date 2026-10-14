@@ -22,6 +22,7 @@
 #include "aud_abi.h"
 
 #include "aud_dsp_sampler.h"
+#include "aud_sfz_voice_budget.hpp"
 
 namespace sfz {
 class Synth;
@@ -49,6 +50,10 @@ constexpr AudParamDescriptor kParams[AUD_SFZ_NUM_PARAMS] = {
      440.0f, 0, 0, 0},
     {sizeof(AudParamDescriptor), "stretch_tuning", "Stretch tuning", "", 0.0f, 1.0f, 0.0f, 0, 0,
      0},
+    // Real time: the node reads it at the end of each block (ticket 29).
+    {sizeof(AudParamDescriptor), "max_voices", "Max voices", "", 1.0f,
+     static_cast<float>(kNoVoiceLimit), static_cast<float>(kNoVoiceLimit),
+     AUD_PARAM_AUTOMATABLE | AUD_PARAM_STEPPED, 255, 0},
 };
 
 // The sample rate, the block and the channels a node assumes until its
@@ -60,6 +65,9 @@ constexpr uint32_t kDefaultChannels = 2;
 constexpr double kCrossfadeSeconds = 0.005;
 constexpr uint32_t kDefaultFadeFrames =
     static_cast<uint32_t>(kCrossfadeSeconds * kDefaultSampleRate + 0.5);
+// The fade of a voice that max_voices or the voice budget steals.
+constexpr uint32_t kDefaultStealFrames =
+    static_cast<uint32_t>(kStealSeconds * kDefaultSampleRate + 0.5);
 // The ramp of an immediate volume change, so that it does not click.
 constexpr uint32_t kVolumeRampFrames = 64;
 // The controllers the node remembers for a new synth: sfizz's extended CCs.
@@ -187,6 +195,10 @@ struct Node {
   uint32_t numerator = 0;
   uint32_t denominator = 0;
   int playing = -1;
+  // The fade of a stolen voice, and the voices the node published to the
+  // budget of the process at the end of its last live block (ticket 29).
+  uint32_t stealFrames = kDefaultStealFrames;
+  VoicePublication published;
   // Per block.
   uint32_t unsupported = 0;
   void* client = nullptr;  // the sfz::Client of the messages

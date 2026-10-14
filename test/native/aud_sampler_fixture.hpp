@@ -587,6 +587,50 @@ inline Reply ask(Fixture& f, int32_t node, const char* path) {
   return answers.empty() ? Reply{} : answers.front();
 }
 
+// ............................................................................
+// Voices (ticket 29)
+
+// The voices of the process, as the live nodes published them.
+inline AudSfzVoiceStats voiceStats() {
+  AudSfzVoiceStats stats{};
+  stats.struct_size = sizeof(AudSfzVoiceStats);
+  AUD_CHECK(aud_dsp_sampler_voice_stats(&stats) == AUD_OK);
+  return stats;
+}
+
+// A voice budget and reserve for one test; those before come back at the
+// end.
+struct VoiceBudgetScope {
+  int32_t budget = aud_dsp_sampler_voice_budget();
+  int32_t reserve = aud_dsp_sampler_voice_reserve();
+  VoiceBudgetScope(int32_t voices, int32_t reserved) {
+    aud_dsp_sampler_set_voice_budget(voices);
+    aud_dsp_sampler_set_voice_reserve(reserved);
+  }
+  ~VoiceBudgetScope() {
+    aud_dsp_sampler_set_voice_budget(budget);
+    aud_dsp_sampler_set_voice_reserve(reserve);
+  }
+};
+
+// The notes of the voices of a node that are not free, sorted, asked of
+// sfizz in an offline block: a voice stolen in a block before has ended
+// once its fade of 10 ms has passed.
+inline std::vector<int64_t> voiceNotes(Fixture& f, int32_t node) {
+  constexpr int kVoices = 32;
+  for (int i = 0; i < kVoices; ++i) {
+    const std::string path = "/voice" + std::to_string(i) + "/trigger_number";
+    AUD_CHECK(message(f, node, path.c_str()) == AUD_OK);
+  }
+  f.renderOffline(256);
+  std::vector<int64_t> notes;
+  for (const Reply& reply : replies(f)) {
+    if (reply.node == node && reply.ints.size() == 1) notes.push_back(reply.ints.front());
+  }
+  std::sort(notes.begin(), notes.end());
+  return notes;
+}
+
 }  // namespace aud_sampler_test
 
 #endif  // AUD_SAMPLER_FIXTURE_HPP

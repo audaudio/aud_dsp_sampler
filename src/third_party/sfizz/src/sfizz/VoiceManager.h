@@ -4,6 +4,13 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 29 of aud_audio_pm): the
+// manager counts the voices that sound, are released and render from its
+// list of active voices (countVoices()), and steals sounding voices for a
+// voice limit of the host (stealVoices()): released ones before held ones,
+// the oldest first, each with its sister voices. A stolen voice is no
+// attack voice for a release trigger.
+
 #pragma once
 
 #include "absl/container/flat_hash_map.h"
@@ -12,6 +19,7 @@
 #include "Region.h"
 #include "Resources.h"
 #include "Voice.h"
+#include "VoiceCount.h"
 #include "VoiceStealing.h"
 #include <vector>
 
@@ -115,6 +123,29 @@ struct VoiceManager final : public Voice::StateListener
      * @return size_t
      */
     size_t getNumActiveVoices() const { return activeVoices_.size(); }
+
+    /**
+     * @brief Count the voices that sound, those of them that are released
+     * and those that render, from the active voices only (aud_dsp_sampler,
+     * ticket 29). Allocates nothing.
+     *
+     * @return VoiceCount
+     */
+    VoiceCount countVoices() const noexcept;
+
+    /**
+     * @brief Steal at least `count` sounding voices, or all of them, for a
+     * voice limit of the host (aud_dsp_sampler, ticket 29): released voices
+     * before held ones, the oldest first, each with its sister voices, which
+     * may take more. Each fades out over `fadeFrames` (Voice::steal()).
+     * Allocates nothing.
+     *
+     * @param count
+     * @param fadeFrames
+     * @return VoiceCount the sounding voices it stole and the released ones
+     *         among them
+     */
+    VoiceCount stealVoices(int count, int fadeFrames) noexcept;
 
     /**
      * @brief Get the number of polyphony groups

@@ -28,11 +28,7 @@ dev_dependencies:
       url: git@github.com:audaudio/aud_audio_graph.git
       tag_pattern: "{{version}}"
     version: ^0.5.0
-  aud_midi_standard:
-    git:
-      url: https://github.com/audmidi/aud_midi_standard.git
-      tag_pattern: "{{version}}"
-    version: ^0.1.0
+  aud_midi_standard: ^0.1.0
   dna_audanika: ^0.0.2
   ffigen: ^23.0.0
   flutter_lints: ^6.0.0

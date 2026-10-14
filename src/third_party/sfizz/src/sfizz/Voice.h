@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 29 of aud_audio_pm): a
+// voice can be stolen by a voice limit of the host (steal()): it fades out
+// linearly over a given number of frames and is free at the end, without
+// the release of its envelope.
+
 #pragma once
 #include "ADSREnvelope.h"
 #include "TriggerEvent.h"
@@ -373,6 +378,27 @@ public:
      * @param fast whether to apply a fast release regardless of the off mode
      */
     void off(int delay, bool fast = false) noexcept;
+
+    /**
+     * @brief Steal the voice for a voice limit of the host (aud_dsp_sampler,
+     *      ticket 29): from the next block on, its output fades out linearly
+     *      over `fadeFrames` and the voice is free at the end, without the
+     *      release of its envelope. A stolen voice counts as turned off, so
+     *      the polyphony checks skip it, and it ignores note-offs and the
+     *      pedals. A voice that does not play or is stolen already stays as
+     *      it is.
+     *
+     * @param fadeFrames the frames of the fade, at least 1
+     */
+    void steal(int fadeFrames) noexcept;
+
+    /**
+     * @brief Is the voice stolen and fading out (aud_dsp_sampler, ticket 29)?
+     *
+     * @return true
+     * @return false
+     */
+    bool isStolen() const noexcept;
 
     /**
      * @brief gets the age of the Voice

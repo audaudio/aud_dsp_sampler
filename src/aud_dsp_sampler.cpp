@@ -9,6 +9,7 @@
 #include "FilePool.h"
 
 #include "aud_sfz_node.hpp"
+#include "aud_sfz_voice_budget.hpp"
 
 namespace {
 
@@ -85,4 +86,30 @@ AUD_EXPORT int64_t aud_dsp_sampler_store_bytes(void) {
 
 AUD_EXPORT int32_t aud_dsp_sampler_store_files(void) {
   return static_cast<int32_t>(sfz::SampleStore::get().size());
+}
+
+AUD_EXPORT void aud_dsp_sampler_set_voice_budget(int32_t voices) {
+  aud_sfz::VoiceBudget::get().setBudget(voices);
+}
+
+AUD_EXPORT int32_t aud_dsp_sampler_voice_budget(void) {
+  return aud_sfz::VoiceBudget::get().budget();
+}
+
+AUD_EXPORT void aud_dsp_sampler_set_voice_reserve(int32_t voices) {
+  aud_sfz::VoiceBudget::get().setReserve(voices);
+}
+
+AUD_EXPORT int32_t aud_dsp_sampler_voice_reserve(void) {
+  return aud_sfz::VoiceBudget::get().reserve();
+}
+
+AUD_EXPORT int32_t aud_dsp_sampler_voice_stats(AudSfzVoiceStats* out) {
+  if (out == nullptr || out->struct_size < sizeof(AudSfzVoiceStats)) {
+    return AUD_ERROR_INVALID_ARGUMENT;
+  }
+  const uint32_t size = out->struct_size;
+  *out = aud_sfz::VoiceBudget::get().stats();
+  out->struct_size = size;
+  return AUD_OK;
 }

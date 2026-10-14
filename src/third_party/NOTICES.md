@@ -13,11 +13,12 @@ and the six oversampling filters of hiir that tell whether they are at rest
 (see the hot spots of the audio thread below).
 `fs_std_impl.cpp` is the one-line translation unit sfizz's build generates
 for the filesystem implementation. Audanika's code in the fork - the
-changes the notes name and the new files `sfizz/src/sfizz/RbjFilters.hpp`
-and `sfizz/src/sfizz/VirtualFile.h` with `VirtualFile.cpp` (ticket 27:
-files a backend serves, e.g. the assets of an APK below `apk:/`) - is under
-sfizz's BSD-2-Clause license (decision sampler-002), so that the fork has
-one license and its fixes can go upstream.
+changes the notes name and the new files `sfizz/src/sfizz/RbjFilters.hpp`,
+`sfizz/src/sfizz/VirtualFile.h` with `VirtualFile.cpp` (ticket 27:
+files a backend serves, e.g. the assets of an APK below `apk:/`) and
+`sfizz/src/sfizz/VoiceCount.h` (ticket 29: a count of the voices of a
+synth) - is under sfizz's BSD-2-Clause license (decision sampler-002), so
+that the fork has one license and its fixes can go upstream.
 
 The Abseil files are those of its release `20240116.0`
 (https://github.com/abseil/abseil-cpp, commit 4a2c633, the submodule of
@@ -29,7 +30,7 @@ with ticket 27: a 32-bit target such as Android's `armeabi-v7a` has no
 | Component | Path | License |
 | --- | --- | --- |
 | sfizz | `sfizz/src/sfizz`, `sfizz/src/sfizz.h` | BSD-2-Clause, `sfizz/LICENSE` |
-| Audanika's code in the fork | `sfizz/src/sfizz/RbjFilters.hpp`, `sfizz/src/sfizz/VirtualFile.h`, `sfizz/src/sfizz/VirtualFile.cpp` and the changes the "Modified by Audanika" notes name | BSD-2-Clause, Copyright (c) 2026 Audanika, header of `RbjFilters.hpp` |
+| Audanika's code in the fork | `sfizz/src/sfizz/RbjFilters.hpp`, `sfizz/src/sfizz/VirtualFile.h`, `sfizz/src/sfizz/VirtualFile.cpp`, `sfizz/src/sfizz/VoiceCount.h` and the changes the "Modified by Audanika" notes name | BSD-2-Clause, Copyright (c) 2026 Audanika, header of `RbjFilters.hpp` |
 | Faust library functions | `sfizz/src/sfizz/gen/filters`, `sfizz/src/sfizz/effects/gen`, `sfizz/src/sfizz/effects/impl/ResonantString*` | STK-4.3 (MIT-style), `sfizz/LICENSE-STK-4.3.md` |
 | Abseil | `sfizz/external/abseil-cpp` | Apache-2.0, `sfizz/external/abseil-cpp/LICENSE` |
 | ghc filesystem | `sfizz/external/filesystem` | MIT, `sfizz/external/filesystem/LICENSE` |
@@ -175,3 +176,28 @@ the render of an app's instrument (`test/native/sfizz_midi_state_test.cpp`,
   `Upsampler2xSse.h`, `Downsampler2xFpu.h`, `Downsampler2xNeon.h`,
   `Downsampler2xSse.h`: `is_cleared()` tells whether the memory of the filter
   is silent.
+
+## The voice limit of the host
+
+Changed for ticket 29, so that the sampler node keeps its voices below a
+limit of its own and below one voice budget of the process while sfizz
+renders: sfizz knows only the polyphony it allocates, and a change of it
+loads the instrument again. sfizz's own polyphony checks and their fades of
+off_time are unchanged; the goldens of the package render as before.
+
+- `sfizz/src/sfizz/VoiceCount.h` (new): the voices a count finds - those
+  that sound, those of them that are released, those that render.
+- `sfizz/src/sfizz/Voice.h`, `Voice.cpp`: `steal()` turns a voice off
+  without its release; its output fades out linearly over the frames the
+  host gives, after its normal rendering, and the voice is cleaned up at
+  the end of the fade like one whose envelope ended, without the 50 ms
+  fade of the envelope. A stolen voice ignores note-offs and the pedals;
+  `isStolen()` tells it.
+- `sfizz/src/sfizz/VoiceManager.h`, `VoiceManager.cpp`: `countVoices()`
+  counts from the list of active voices instead of walking all voices;
+  `stealVoices()` steals sounding voices, released ones before held ones,
+  the oldest first, each with its sister voices, sorting in a vector that
+  holds as many voices as the synth, so that nothing allocates. A stolen
+  voice is no attack voice that lets a release trigger start.
+- `sfizz/src/sfizz/Synth.h`, `Synth.cpp`: `countVoices()` and
+  `stealVoices()` for the host, through the voice manager.

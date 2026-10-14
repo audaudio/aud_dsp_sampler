@@ -18,6 +18,11 @@
 // converted once per run of equal values instead of once per sample
 // (SameArgumentCache), with the same results: exp2f and powf took a good
 // part of an app's audio thread for every voice of a dense chord.
+// Ticket 29: a voice can be stolen by a voice limit of the host (steal()):
+// it counts as turned off, ignores note-offs and the pedals, and its output
+// fades out linearly over the frames the host gives, after its normal
+// rendering; at the end of the fade it is cleaned up like a voice whose
+// envelope ended, without the 50 ms fade of the envelope.
 
 #include "Voice.h"
 #include "Layer.h"
@@ -226,6 +231,14 @@ struct Voice::Impl
     void off(int delay, bool fast = false) noexcept;
 
     /**
+     * @brief Fade the output of a stolen voice out over its rendered block
+     * and clean it up at the end of the fade (aud_dsp_sampler, ticket 29).
+     *
+     * @param buffer
+     */
+    void fadeOutStolen(AudioSpan<float, 2> buffer) noexcept;
+
+    /**
      * @brief Setup the extended CC values for the voice
      *
      */
@@ -240,6 +253,11 @@ struct Voice::Impl
     State state_ { State::idle };
     bool noteIsOff_ { false };
     bool offed_ { false };
+    // A voice stolen by a voice limit of the host fades out over
+    // stealFrames_; stealRemaining_ counts the frames left (aud_dsp_sampler,
+    // ticket 29). 0: not stolen.
+    int stealFrames_ { 0 };
+    int stealRemaining_ { 0 };
     enum class SustainState { Up, Sustaining };
     SustainState sustainState_ { SustainState::Up };
     enum class SostenutoState { Up, Sustaining, PreviouslyDown };
@@ -643,6 +661,41 @@ void Voice::Impl::off(int delay, bool fast) noexcept
     release(delay);
 }
 
+void Voice::steal(int fadeFrames) noexcept
+{
+    Impl& impl = *impl_;
+    if (impl.state_ != State::playing || impl.stealFrames_ > 0)
+        return;
+
+    // Turned off without a release: the fade of renderBlock() ends it.
+    impl.offed_ = true;
+    impl.stealFrames_ = max(fadeFrames, 1);
+    impl.stealRemaining_ = impl.stealFrames_;
+}
+
+bool Voice::isStolen() const noexcept
+{
+    Impl& impl = *impl_;
+    return impl.stealFrames_ > 0;
+}
+
+void Voice::Impl::fadeOutStolen(AudioSpan<float, 2> buffer) noexcept
+{
+    // Linear from 1 to 0: the last frame of the fade is silent.
+    const float step = 1.0f / static_cast<float>(stealFrames_);
+    const size_t numFrames = buffer.getNumFrames();
+    const size_t numChannels = buffer.getNumChannels();
+    for (size_t i = 0; i < numFrames; ++i) {
+        stealRemaining_ = max(stealRemaining_ - 1, 0);
+        const float gain = static_cast<float>(stealRemaining_) * step;
+        for (size_t c = 0; c < numChannels; ++c)
+            buffer.getChannel(c)[i] *= gain;
+    }
+
+    if (stealRemaining_ == 0)
+        switchState(State::cleanMeUp);
+}
+
 void Voice::registerNoteOff(int delay, int noteNumber, float velocity) noexcept
 {
     ASSERT(velocity >= 0.0 && velocity <= 1.0);
@@ -652,7 +705,8 @@ void Voice::registerNoteOff(int delay, int noteNumber, float velocity) noexcept
     if (impl.region_ == nullptr)
         return;
 
-    if (impl.state_ != State::playing)
+    // A stolen voice fades out as it was told (aud_dsp_sampler, ticket 29).
+    if (impl.state_ != State::playing || impl.stealFrames_ > 0)
         return;
 
     if (impl.triggerEvent_.number == noteNumber && impl.triggerEvent_.type == TriggerEventType::NoteOn) {
@@ -680,7 +734,8 @@ void Voice::registerCC(int delay, int ccNumber, float ccValue) noexcept
 
     const Region& region = *impl.region_;
 
-    if (impl.state_ != State::playing)
+    // A stolen voice fades out as it was told (aud_dsp_sampler, ticket 29).
+    if (impl.state_ != State::playing || impl.stealFrames_ > 0)
         return;
 
     if (ccNumber != region.sustainCC && ccNumber != region.sostenutoCC)
@@ -827,6 +882,9 @@ void Voice::renderBlock(AudioSpan<float, 2> buffer) noexcept
         impl.filterStageMono(buffer);
         impl.panStageMono(buffer);
     }
+
+    if (impl.stealFrames_ > 0)
+        impl.fadeOutStolen(buffer);
 
     if (!region->flexAmpEG) {
         if (!impl.egAmplitude_.isSmoothing())
@@ -1775,6 +1833,8 @@ void Voice::reset() noexcept
     impl.noteIsOff_ = false;
     impl.sostenutoState_ = Impl::SostenutoState::Up;
     impl.offed_ = false;
+    impl.stealFrames_ = 0;
+    impl.stealRemaining_ = 0;
 
     impl.resetLoopInformation();
 
