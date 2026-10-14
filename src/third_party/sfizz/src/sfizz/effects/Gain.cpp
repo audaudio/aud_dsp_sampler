@@ -7,6 +7,9 @@
 // Modified by Audanika for aud_dsp_sampler (ticket 27 of aud_audio_pm): a
 // block shorter than the block size of the synth is processed without a
 // failed size check, which printed to stderr on the audio thread.
+// Ticket 28: the gain, which holds for the block, is converted to linear
+// once per block instead of once per sample: the same factor, without a
+// pow per sample on the audio thread. A finite gain is at rest.
 
 /**
    Note(jpc): this effect is book-only, mentioned but not documented
@@ -21,6 +24,7 @@
 #include "Opcode.h"
 #include "SIMDHelpers.h"
 #include "absl/memory/memory.h"
+#include <cmath>
 
 namespace sfz {
 namespace fx {
@@ -32,7 +36,7 @@ namespace fx {
 
     void Gain::setSamplesPerBlock(int samplesPerBlock)
     {
-        _tempBuffer.resize(samplesPerBlock);
+        (void)samplesPerBlock;
     }
 
     void Gain::clear()
@@ -41,20 +45,25 @@ namespace fx {
 
     void Gain::process(const float* const inputs[], float* const outputs[], unsigned nframes)
     {
-        const float baseGain = _gain;
-
-        absl::Span<float> gains = _tempBuffer.getSpan(0).first(nframes);
-        std::fill(gains.begin(), gains.end(), baseGain);
-
         // to linear
-        for (unsigned i = 0; i < nframes; ++i)
-            gains[i] = std::pow(10.0f, 0.05f * gains[i]);
+        const float gain = linearGain();
 
         for (unsigned c = 0; c < EffectChannels; ++c) {
             absl::Span<const float> input { inputs[c], nframes };
             absl::Span<float> output { outputs[c], nframes };
-            sfz::applyGain(absl::Span<const float> { gains }, input, output);
+            sfz::applyGain1(gain, input, output);
         }
+    }
+
+    float Gain::linearGain() const
+    {
+        return std::pow(10.0f, 0.05f * _gain);
+    }
+
+    bool Gain::isAtRest() const
+    {
+        // A silent input times a finite gain is silent.
+        return std::isfinite(linearGain());
     }
 
     std::unique_ptr<Effect> Gain::makeInstance(absl::Span<const Opcode> members)

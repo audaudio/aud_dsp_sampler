@@ -519,6 +519,44 @@ AUD_TEST(a_load_that_runs_takes_a_polyphony_change) {
   AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 4800, 480), f.left.size()), 750.0, 1.0);
 }
 
+AUD_TEST(loads_flex_egs_on_several_nodes_at_once) {
+  // Four nodes load instruments with flex EGs at the same time, as the
+  // nodes of an app that starts do: the workers of the engine build their
+  // regions side by side, every round with shapes of its own and one that
+  // all share. The curves of the shapes belong to the process; their map
+  // took no lock, and parallel loads corrupted it (ticket 28).
+  constexpr int kNodes = 4;
+  constexpr int kRounds = 25;
+  Fixture f;
+  std::vector<int32_t> nodes;
+  for (int i = 0; i < kNodes; ++i) nodes.push_back(f.sampler());
+  int loaded = 0;
+  for (int round = 0; round < kRounds; ++round) {
+    std::vector<int32_t> ids;
+    for (int i = 0; i < kNodes; ++i) {
+      const float shape = 0.5f + static_cast<float>(i) + 0.03125f * static_cast<float>(round);
+      ids.push_back(f.loadText(
+          nodes[i], "/aud_dsp_sampler/flex.sfz",
+          "<region> sample=*sine eg1_ampeg=1 eg1_sustain=2 eg1_time1=0.01 eg1_level1=1 "
+          "eg1_shape1=" + std::to_string(shape) +
+              " eg1_time2=0.02 eg1_level2=0.5 eg1_shape2=-2 eg1_time3=0.2 eg1_level3=0\n"));
+    }
+    AUD_CHECK(aud_graph_wait_loads(f.graph, 0, 10000) == AUD_OK);
+    for (int32_t id : ids) loaded += f.load(id).result == AUD_OK ? 1 : 0;
+  }
+  AUD_CHECK(loaded == kNodes * kRounds);
+  // Every node plays its last instrument, held at the sustain level.
+  for (int32_t node : nodes) {
+    f.renderOffline(256);
+    f.noteOn(node, 69);
+    f.renderOffline(4800);
+    AUD_CHECK(peak(f.left, since(f, 4800, 2400), f.left.size()) > 0.01f);
+    f.noteOff(node, 69);
+    f.renderOffline(19200);
+    AUD_CHECK(peak(f.left, since(f, 19200, 14400), f.left.size()) == 0.0f);
+  }
+}
+
 // ############################################################################
 // The swap of instruments
 

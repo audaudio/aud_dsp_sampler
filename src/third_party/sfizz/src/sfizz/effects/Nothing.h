@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): the
+// effect, which copies its input, is always at rest.
+
 #pragma once
 #include "Effects.h"
 
@@ -35,6 +38,11 @@ namespace fx {
          * @brief Copy the input signal to the output
          */
         void process(const float* const inputs[], float* const outputs[], unsigned nframes) override;
+
+        /**
+         * @brief Always: silence passes as silence (Audanika, ticket 28).
+         */
+        bool isAtRest() const override { return true; }
     };
 
 } // namespace fx

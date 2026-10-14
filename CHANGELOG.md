@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.1 - 2026-10-14
+
+### Added
+
+- Add thread safety to the state all synths of a process share
+- A mutex guards the curves of flex envelopes, which parallel loads corrupted (an app crashed on a preset change)
+- The silence wavetable is built once and thread-safe
+- The Faust table of the distortion is filled once instead of by every stage
+- The CRC table of stb_vorbis and the CPU detection of dr_flac and dr_mp3 are set up once
+- Regression tests load in parallel threads and on the engine's workers; TSan reports file and line on macOS
+- NOTICES.md lists the changed files and the audit of the shared state
+- Add the sample rate of the distortion stages to the notes
+- A new sample rate sets the constants of each stage; the original kept those of 48 kHz
+- Add the review fixes of the shared state notes
+- Correct the notes of Disto.cpp and NOTICES.md: a new sample rate set the constants of each stage before too, the distortion sounds as in 0.3.0
+- Drop the inner flag of dr_flac's CPU detection, which the once guard makes redundant
+- Name the states of the once guards of dr_flac and stb_vorbis instead of 0, 1 and 2
+- Let a failed dsymutil leave no dSYM bundle and name its error, also when it is missing
+- List AUD_RTSAN_CXX and AUD_LLVM_SYMBOLIZER in the usage of scripts/test-native.js
+- Describe the TSan symbolizer on macOS and the shared state of the synths in README.md and README.de.md
+- Raise the version in the installation of both READMEs to ^0.3.0
+- Add a faster MIDI flush, compressor and gain to the fork
+- Flush only the MIDI event vectors that received events since the last flush, from a list of fixed size
+- Call log10 in the compressor only above a level 1e-4 below the threshold and pow only for a gain other than 0 dB
+- Pass silence through a compressor at rest and skip the effects of a silent bus whose effects are at rest
+- Run the oversampling filters and detectors of both compressor channels in one loop on state in registers
+- Convert the gain of the gain effect once per block and a voice's pitch and volume modulation once per run of equal values
+- Add is_cleared to the oversampling filters of hiir
+- Add native tests that compare the MIDI state, the compressor, the gain and the effect bus with the original code bit for bit
+- Add the render of an app-like instrument and its golden from release 0.3.0
+- Add node scripts/test-native.js --bench, the micro-benchmark against release 0.3.0
+- List the changed files in NOTICES.md and describe the changes in README.md and README.de.md
+
 ## 0.3.0 - 2026-10-13
 
 ### Added

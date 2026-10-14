@@ -4,9 +4,21 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm):
+// flushEvents() flushes only the event vectors that received an event since
+// the last flush: every function that inserts an event marks its vector, and
+// the resets, which leave each vector they touch at one event at delay 0,
+// need no flush. The list of marked vectors has a fixed size; nothing
+// allocates on the audio thread.
+
 #include "MidiState.h"
 #include "utility/Macros.h"
 #include "utility/Debug.h"
+
+constexpr int sfz::MidiState::polyAftertouchSlot;
+constexpr int sfz::MidiState::pitchSlot;
+constexpr int sfz::MidiState::channelAftertouchSlot;
+constexpr int sfz::MidiState::numEventSlots;
 
 sfz::MidiState::MidiState()
 {
@@ -94,14 +106,25 @@ void sfz::MidiState::flushEvents() noexcept
         events.resize(1);
     };
 
-    for (auto& events : ccEvents)
-        flushEventVector(events);
+    // The other vectors hold one event at delay 0, which a flush keeps.
+    for (int i = 0; i < numSlotsToFlush; ++i) {
+        const int slot = slotsToFlush[i];
+        flushEventVector(eventsOfSlot(slot));
+        toFlush[slot] = false;
+    }
+    numSlotsToFlush = 0;
+}
 
-    for (auto& events: polyAftertouchEvents)
-        flushEventVector(events);
-
-    flushEventVector(pitchEvents);
-    flushEventVector(channelAftertouchEvents);
+sfz::EventVector& sfz::MidiState::eventsOfSlot(int slot) noexcept
+{
+    ASSERT(slot >= 0 && slot < numEventSlots);
+    if (slot < polyAftertouchSlot)
+        return ccEvents[slot];
+    if (slot < pitchSlot)
+        return polyAftertouchEvents[slot - polyAftertouchSlot];
+    if (slot == pitchSlot)
+        return pitchEvents;
+    return channelAftertouchEvents;
 }
 
 
@@ -161,6 +184,7 @@ void sfz::MidiState::insertEventInVector(EventVector& events, int delay, float v
 void sfz::MidiState::pitchBendEvent(int delay, float pitchBendValue) noexcept
 {
     ASSERT(pitchBendValue >= -1.0f && pitchBendValue <= 1.0f);
+    markForFlush(pitchSlot);
     insertEventInVector(pitchEvents, delay, pitchBendValue);
 }
 
@@ -173,6 +197,7 @@ float sfz::MidiState::getPitchBend() const noexcept
 void sfz::MidiState::channelAftertouchEvent(int delay, float aftertouch) noexcept
 {
     ASSERT(aftertouch >= -1.0f && aftertouch <= 1.0f);
+    markForFlush(channelAftertouchSlot);
     insertEventInVector(channelAftertouchEvents, delay, aftertouch);
 }
 
@@ -182,6 +207,7 @@ void sfz::MidiState::polyAftertouchEvent(int delay, int noteNumber, float aftert
     if (noteNumber < 0 || noteNumber >= static_cast<int>(polyAftertouchEvents.size()))
         return;
 
+    markForFlush(polyAftertouchSlot + noteNumber);
     insertEventInVector(polyAftertouchEvents[noteNumber], delay, aftertouch);
 }
 
@@ -202,6 +228,8 @@ float sfz::MidiState::getPolyAftertouch(int noteNumber) const noexcept
 
 void sfz::MidiState::ccEvent(int delay, int ccNumber, float ccValue) noexcept
 {
+    ASSERT(ccNumber >= 0 && ccNumber < config::numCCs);
+    markForFlush(ccNumber);
     insertEventInVector(ccEvents[ccNumber], delay, ccValue);
 }
 
@@ -265,6 +293,11 @@ void sfz::MidiState::resetEventStates() noexcept
 
     clearEvents(pitchEvents);
     clearEvents(channelAftertouchEvents);
+
+    // Every vector holds one event at delay 0: none needs a flush.
+    for (int i = 0; i < numSlotsToFlush; ++i)
+        toFlush[slotsToFlush[i]] = false;
+    numSlotsToFlush = 0;
 }
 
 const sfz::EventVector& sfz::MidiState::getCCEvents(int ccIdx) const noexcept

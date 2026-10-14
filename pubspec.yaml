@@ -1,6 +1,6 @@
 name: aud_dsp_sampler
 description: "SFZ sampler node of the Audanika Audio Engine on the sfizz fork"
-version: 0.3.0
+version: 0.3.1
 publish_to: none
 homepage: https://github.com/audaudio/aud_dsp_sampler
 repository: https://github.com/audaudio/aud_dsp_sampler
@@ -36,7 +36,7 @@ dev_dependencies:
   dna_audanika: ^0.0.2
   ffigen: ^23.0.0
   flutter_lints: ^6.0.0
-  helix: ^1.11.0
+  helix: ^1.12.0
   test: ^1.33.0
 
 # Builds the Java shim in android/ into Android apps: a content provider

@@ -8,6 +8,8 @@
 // fverb effect is gone; its Faust code was licensed LGPL-3.0 with an
 // exception, which the package does not ship. The factory names the effect
 // types it did not know; their effects pass the signal through.
+// Ticket 28: a bus whose inputs are silent and whose effects are all at rest
+// leaves its outputs silent without running the effects.
 
 #include "Effects.h"
 #include "AudioSpan.h"
@@ -117,12 +119,16 @@ void EffectBus::clearInputs(unsigned nframes)
 {
     AudioSpan<float>(_inputs).first(nframes).fill(0.0f);
     AudioSpan<float>(_outputs).first(nframes).fill(0.0f);
+    _inputsTouched = false;
+    _outputsSilent = true;
 }
 
 void EffectBus::addToInputs(const float* const addInput[], float addGain, unsigned nframes)
 {
     if (addGain == 0)
         return;
+
+    _inputsTouched = true;
 
     for (unsigned c = 0; c < EffectChannels; ++c) {
         absl::Span<const float> addIn { addInput[c], nframes };
@@ -135,6 +141,7 @@ void EffectBus::applyGain(const float* gain, unsigned nframes)
     if (!gain)
         return;
 
+    _inputsTouched = true;
     absl::Span<const float> gainSpan { gain, nframes };
     for (unsigned c = 0; c < EffectChannels; ++c) {
         sfz::applyGain<float>(gainSpan, _inputs.getSpan(c).first(nframes));
@@ -153,8 +160,37 @@ void EffectBus::clear()
         effectPtr->clear();
 }
 
+bool EffectBus::isAtRest(unsigned nframes) const noexcept
+{
+    if (_inputsTouched) {
+        const float* const inputs[EffectChannels] = {
+            _inputs.getConstSpan(0).data(),
+            _inputs.getConstSpan(1).data(),
+        };
+        if (!isSilent(inputs, nframes))
+            return false;
+    }
+
+    for (const auto& effectPtr : _effects) {
+        if (!effectPtr->isAtRest())
+            return false;
+    }
+
+    return true;
+}
+
 void EffectBus::process(unsigned nframes)
 {
+    // Silence passes the effects at rest as silence, and leaves them at rest.
+    if (isAtRest(nframes)) {
+        if (!_outputsSilent) {
+            AudioSpan<float>(_outputs).first(nframes).fill(0.0f);
+            _outputsSilent = true;
+        }
+        return;
+    }
+
+    _outputsSilent = false;
     size_t numEffects = _effects.size();
 
     // TODO: Can we have only one buffer and pass stuff without copies?

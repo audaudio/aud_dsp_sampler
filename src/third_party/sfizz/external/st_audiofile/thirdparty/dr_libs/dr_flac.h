@@ -8,6 +8,11 @@ GitHub: https://github.com/mackron/dr_libs
 */
 
 /*
+Modified by Audanika for aud_dsp_sampler (ticket 28 of aud_audio_pm): the CPU caps are detected once per
+process. Every decoder that opened a file stored them again, while decoders on other threads read them.
+*/
+
+/*
 RELEASE NOTES - v0.12.0
 =======================
 Version 0.12.0 has breaking API changes including changes to the existing API and the removal of deprecated APIs.
@@ -1366,6 +1371,7 @@ DRFLAC_API drflac_bool32 drflac_next_cuesheet_track(drflac_cuesheet_track_iterat
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 /* Inline */
 #ifdef _MSC_VER
@@ -1736,16 +1742,6 @@ DRFLAC_API const char* drflac_version_string(void)
 
 
 /* CPU caps. */
-#if defined(__has_feature)
-    #if __has_feature(thread_sanitizer)
-        #define DRFLAC_NO_THREAD_SANITIZE __attribute__((no_sanitize("thread")))
-    #else
-        #define DRFLAC_NO_THREAD_SANITIZE
-    #endif
-#else
-    #define DRFLAC_NO_THREAD_SANITIZE
-#endif
-
 #if defined(DRFLAC_HAS_LZCNT_INTRINSIC)
 static drflac_bool32 drflac__gIsLZCNTSupported = DRFLAC_FALSE;
 #endif
@@ -1754,33 +1750,21 @@ static drflac_bool32 drflac__gIsLZCNTSupported = DRFLAC_FALSE;
 static drflac_bool32 drflac__gIsSSE2Supported  = DRFLAC_FALSE;
 static drflac_bool32 drflac__gIsSSE41Supported = DRFLAC_FALSE;
 
-/*
-I've had a bug report that Clang's ThreadSanitizer presents a warning in this function. Having reviewed this, this does
-actually make sense. However, since CPU caps should never differ for a running process, I don't think the trade off of
-complicating internal API's by passing around CPU caps versus just disabling the warnings is worthwhile. I'm therefore
-just going to disable these warnings. This is disabled via the DRFLAC_NO_THREAD_SANITIZE attribute.
-*/
-DRFLAC_NO_THREAD_SANITIZE static void drflac__init_cpu_caps(void)
+/* Runs once per process, see drflac__init_cpu_caps(). */
+static void drflac__detect_cpu_caps(void)
 {
-    static drflac_bool32 isCPUCapsInitialized = DRFLAC_FALSE;
-
-    if (!isCPUCapsInitialized) {
-        /* LZCNT */
+    /* LZCNT */
 #if defined(DRFLAC_HAS_LZCNT_INTRINSIC)
-        int info[4] = {0};
-        drflac__cpuid(info, 0x80000001);
-        drflac__gIsLZCNTSupported = (info[2] & (1 << 5)) != 0;
+    int info[4] = {0};
+    drflac__cpuid(info, 0x80000001);
+    drflac__gIsLZCNTSupported = (info[2] & (1 << 5)) != 0;
 #endif
 
-        /* SSE2 */
-        drflac__gIsSSE2Supported = drflac_has_sse2();
+    /* SSE2 */
+    drflac__gIsSSE2Supported = drflac_has_sse2();
 
-        /* SSE4.1 */
-        drflac__gIsSSE41Supported = drflac_has_sse41();
-
-        /* Initialized. */
-        isCPUCapsInitialized = DRFLAC_TRUE;
-    }
+    /* SSE4.1 */
+    drflac__gIsSSE41Supported = drflac_has_sse41();
 }
 #else
 static drflac_bool32 drflac__gIsNEONSupported  = DRFLAC_FALSE;
@@ -1803,7 +1787,8 @@ static DRFLAC_INLINE drflac_bool32 drflac__has_neon(void)
 #endif
 }
 
-DRFLAC_NO_THREAD_SANITIZE static void drflac__init_cpu_caps(void)
+/* Runs once per process, see drflac__init_cpu_caps(). */
+static void drflac__detect_cpu_caps(void)
 {
     drflac__gIsNEONSupported = drflac__has_neon();
 
@@ -1812,6 +1797,29 @@ DRFLAC_NO_THREAD_SANITIZE static void drflac__init_cpu_caps(void)
 #endif
 }
 #endif
+
+/* The states of the detection of the CPU caps. */
+enum { DRFLAC_CPU_CAPS_UNDETECTED, DRFLAC_CPU_CAPS_DETECTING, DRFLAC_CPU_CAPS_DETECTED };
+static atomic_int drflac__gCPUCapsState = DRFLAC_CPU_CAPS_UNDETECTED;
+
+/*
+Detects the CPU caps once per process; a thread that comes while another one detects them waits for it. A decoder reads
+them after it was opened, so after this returned.
+*/
+static void drflac__init_cpu_caps(void)
+{
+    int expected = DRFLAC_CPU_CAPS_UNDETECTED;
+    if (atomic_load_explicit(&drflac__gCPUCapsState, memory_order_acquire) == DRFLAC_CPU_CAPS_DETECTED) {
+        return;
+    }
+    if (atomic_compare_exchange_strong_explicit(&drflac__gCPUCapsState, &expected, DRFLAC_CPU_CAPS_DETECTING, memory_order_acq_rel, memory_order_acquire)) {
+        drflac__detect_cpu_caps();
+        atomic_store_explicit(&drflac__gCPUCapsState, DRFLAC_CPU_CAPS_DETECTED, memory_order_release);
+        return;
+    }
+    while (atomic_load_explicit(&drflac__gCPUCapsState, memory_order_acquire) != DRFLAC_CPU_CAPS_DETECTED) {
+    }
+}
 
 
 /* Endian Management */

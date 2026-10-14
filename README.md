@@ -36,7 +36,7 @@ dependencies:
     git:
       url: git@github.com:audaudio/aud_dsp_sampler.git
       tag_pattern: "{{version}}"
-    version: ^0.2.0
+    version: ^0.3.0
 ```
 
 An app depends on `aud_audio` and on the DSP packages it uses, and
@@ -312,6 +312,20 @@ graph.setString(
   Audanika's own code after the Audio EQ Cookbook, the Faust-generated
   code that stays ships the STK-4.3 notice, and fverb, the metronome and
   cephes are gone.
+- The synths of several nodes load on the workers of the engine at the
+  same time. What they share in the process - the curves of the flex EG
+  shapes, the silent wavetable, the table of the distortion, the CRC
+  table of stb_vorbis and the CPU caps of dr_flac and dr_mp3 - is built
+  once, atomic or guarded by a mutex that only loads take; `NOTICES.md`
+  lists the audit (ticket 28).
+- The hot spots of an app's audio thread are faster, with the same output
+  bit for bit (ticket 28): the MIDI state flushes only the event vectors
+  that received events; the compressor calls `log10` and `pow` only above
+  its threshold and while it reduces the gain, and passes silence through
+  while it is at rest; the gain effect converts its gain once per block; a
+  bus whose input is silent skips its effects at rest; a voice converts its
+  pitch and its volume modulation once per run of equal values.
+  `NOTICES.md` lists the changed files.
 - The library builds for every ABI of Android, the 32-bit `armeabi-v7a`
   among them, where Abseil's 128-bit integer has no compiler type and
   needs `int128.cc`. On Android it links with `--no-undefined`: a symbol
@@ -351,12 +365,30 @@ node scripts/test-native.js
   the RealtimeSanitizer - with a probe that proves it catches an
   allocation on the audio thread - and the thread sanitizer, under the
   engine's watchdog. The tests of the fork compile as gnu++14, like sfizz.
+- The tests of ticket 28 compare the faster code with the original: the
+  MIDI state with the original flush on random event streams, the
+  compressor and the gain with their original code on loud, quiet, silent,
+  transient and one-sided signals, and the render of an instrument like an
+  app's with `test/goldens/sfizz_app_instrument.wav`, which release 0.3.0
+  rendered.
+- `--bench` builds the micro-benchmark `test/native/bench/sfizz_bench.cpp`
+  at -O3 with the fork of release 0.3.0 (`AUD_BENCH_BASE` names another
+  git ref) and with the fork of now, prints what the flush of the MIDI
+  state, the compressor, the gain, an idle synth and four synths cost per
+  call before and after, and fails when the renders of both differ by more
+  than 1e-6; with `UPDATE_GOLDENS=1` it writes the golden with the old fork.
 - `--help` lists the options, `--only=asan|plain|rtsan|tsan` runs one
   build, and an unknown option ends the run with exit code 2.
   `AUD_TEST_FILTER` runs the tests whose name contains it;
   `AUD_SFIZZ_PRISTINE=<sfizz checkout>` also compares the RBJ filters with
   the Faust originals. The build cache in `.dart_tool` keeps only the
   objects and binaries of the last run.
+- On macOS the thread sanitizer names the files and lines of a report
+  through LLVM's `llvm-symbolizer` and a dSYM bundle of the test binary
+  that LLVM's `dsymutil` writes - from LLVM of Homebrew, or the
+  `llvm-symbolizer` that `AUD_LLVM_SYMBOLIZER` names, with `dsymutil`
+  beside it; Apple's `atos` hung on reports of races. `AUD_RTSAN_CXX`
+  names the compiler of the RealtimeSanitizer build.
 
 ## Contributing
 
