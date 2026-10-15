@@ -21,6 +21,10 @@ Part of the Audanika Audio Engine; planned in [aud_audio_pm](https://github.com/
 - Playing hard does not overload the audio thread: a voice limit per node
   that changes in real time and one voice budget for all nodes of the
   process, kept by stealing voices with a fade of 10 ms (sampler-008)
+- A voice costs a third of what it cost before ticket 30: the voice loop
+  visits only the busy voices, fuses its gain and pan passes, interpolates
+  and envelopes four frames at once on arm64 and renders whole envelope
+  stages, with renders that stay the same bit for bit (sampler-009)
 - Nothing allocates on the audio thread (interop-001); the native tests
   run the node under the engine's watchdog, the RealtimeSanitizer and the
   ThreadSanitizer
@@ -56,6 +60,8 @@ one.
   with the node, its measurements and findings
 - [The plan of ticket 29](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-29-limit-the-voices-by-the-cpu-power-of-the-device.md)
   with the voice limit, the voice budget and the stealing
+- [The plan of ticket 30](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-30-render-the-sampler-voices-faster-on-the-big-cores.md)
+  with the faster voice loop and its measurements
 - The decisions behind the package:
   - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
     sfizz, forked, as the core of the sampler
@@ -67,6 +73,8 @@ one.
     the resources of the process and the sample cache budget
   - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
     the voice limit per node and the voice budget of the process
+  - [sampler-009](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-009.md):
+    the faster voice loop of the fork
   - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
     messages to nodes and their answers
   - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):

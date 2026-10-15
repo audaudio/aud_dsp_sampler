@@ -23,6 +23,11 @@ Teil der Audanika Audio Engine; geplant in [aud_audio_pm](https://github.com/aud
   pro Knoten, das sich in Echtzeit ändert, und ein Stimmenbudget für alle
   Knoten des Prozesses, gehalten durch das Stehlen von Stimmen mit einer
   Ausblendung von 10 ms (sampler-008)
+- Eine Stimme kostet ein Drittel dessen, was sie vor Ticket 30 kostete: die
+  Stimmenschleife besucht nur die belegten Stimmen, fasst ihre Gain- und
+  Pan-Durchläufe zusammen, interpoliert und hüllt auf arm64 vier Frames auf
+  einmal und rendert ganze Hüllkurvenabschnitte, bei Bit für Bit gleichen
+  Renderings (sampler-009)
 - Auf dem Audio-Thread wird nichts alloziert (interop-001); die nativen
   Tests lassen den Knoten unter dem Watchdog der Engine, dem
   RealtimeSanitizer und dem ThreadSanitizer laufen
@@ -58,6 +63,8 @@ entfällt ohne eines.
   mit dem Knoten, seinen Messungen und Erkenntnissen
 - [Der Plan von Ticket 29](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-29-limit-the-voices-by-the-cpu-power-of-the-device.md)
   mit dem Stimmenlimit, dem Stimmenbudget und dem Stehlen
+- [Der Plan von Ticket 30](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-30-render-the-sampler-voices-faster-on-the-big-cores.md)
+  mit der schnelleren Stimmenschleife und ihren Messungen
 - Die Entscheidungen hinter dem Paket:
   - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
     sfizz, geforkt, als Kern des Samplers
@@ -69,6 +76,8 @@ entfällt ohne eines.
     die Ressourcen des Prozesses und das Sample-Cache-Budget
   - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
     das Stimmenlimit pro Knoten und das Stimmenbudget des Prozesses
+  - [sampler-009](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-009.md):
+    die schnellere Stimmenschleife des Forks
   - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
     Nachrichten an Knoten und ihre Antworten
   - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):

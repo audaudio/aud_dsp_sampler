@@ -67,8 +67,14 @@
 - Add the levels of a flex EG stage four frames at once
 
 - On arm64 the levels of a timed stage are computed for four frames at once, which mostly share the two points of the curve
+
 - A block that ends before its stage skips the search for the end; stepSum() takes sums below 16 steps in a plain loop
+
 - The renders stay the same bit for bit
+
+- Add the faster voice loop to the README and the index
+
+- The goals and the documentation name sampler-009 and the plan of ticket 30
 
 ## 0.3.2 - 2026-10-14
 
