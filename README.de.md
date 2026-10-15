@@ -469,14 +469,25 @@ node scripts/test-native.js
   Budget setzt -, die Reserve, Offline-Renders, und dass ein Knoten, der
   geht, keine Stimmen in den Zählern hinterlässt.
 - `--bench` baut den Mikro-Benchmark `test/native/bench/sfizz_bench.cpp`
-  mit -O3 mit dem Fork von Release 0.3.0 (`AUD_BENCH_BASE` nennt eine
+  mit -O3 mit dem Fork von Release 0.3.2 (`AUD_BENCH_BASE` nennt eine
   andere Git-Ref) und mit dem Fork von jetzt, gibt aus, was das Leeren des
   MIDI-Zustands, der Kompressor, der Gain, ein ruhender Synth und vier
-  Synths pro Aufruf vorher und nachher kosten, und schlägt fehl, wenn die
-  Renders beider um mehr als 1e-6 abweichen; mit `UPDATE_GOLDENS=1`
-  schreibt er das Golden mit dem alten Fork.
+  Synths pro Aufruf vorher und nachher kosten, und seit Ticket 30 die
+  Stimmen: einen Block mit 1, 8 und 32 gehaltenen Noten nach Interpolation
+  (linear, Hermite, gefensterter Sinc mit 8 Punkten), nach Hüllkurve
+  (ADSR, Flex-EG), mit Mono- und Stereo-Samples, mit und ohne bewegtes
+  Pitch Bend, daraus die Kosten pro Stimme und den festen Teil eines
+  Blocks, und den Start eines Bursts von 10 Note-ons. Er schlägt fehl,
+  wenn die Renders beider um mehr als 1e-5 des Vollausschlags abweichen
+  (sampler-007); mit `UPDATE_GOLDENS=1` schreibt er das Golden mit dem
+  alten Fork. `--bench --android[=<adb serial>]` baut beide für arm64-v8a
+  mit dem Android-NDK (`ANDROID_NDK_HOME`, sonst das neueste des SDK),
+  führt sie über adb (`ADB`) in `/data/local/tmp/aud_bench` nacheinander
+  auf jedem Cluster der Kerne des Geräts aus, mit `taskset` gebunden, und
+  gibt eine Tabelle pro Cluster aus.
 - `--help` listet die Optionen, `--only=asan|plain|rtsan|tsan` führt einen
-  Build aus, und eine unbekannte Option beendet den Lauf mit Exit-Code 2.
+  Build aus, und eine unbekannte Option oder `--android` ohne `--bench`
+  beendet den Lauf mit Exit-Code 2.
   `AUD_TEST_FILTER` führt die Tests aus, deren Name ihn enthält;
   `AUD_SFIZZ_PRISTINE=<sfizz checkout>` vergleicht die RBJ-Filter
   zusätzlich mit den Faust-Originalen. Der Build-Cache in `.dart_tool`

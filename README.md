@@ -441,13 +441,24 @@ node scripts/test-native.js
   reserve, offline renders, and that a node that goes leaves no voices in
   the counts.
 - `--bench` builds the micro-benchmark `test/native/bench/sfizz_bench.cpp`
-  at -O3 with the fork of release 0.3.0 (`AUD_BENCH_BASE` names another
+  at -O3 with the fork of release 0.3.2 (`AUD_BENCH_BASE` names another
   git ref) and with the fork of now, prints what the flush of the MIDI
   state, the compressor, the gain, an idle synth and four synths cost per
-  call before and after, and fails when the renders of both differ by more
-  than 1e-6; with `UPDATE_GOLDENS=1` it writes the golden with the old fork.
+  call before and after, and since ticket 30 the voices: a block with 1, 8
+  and 32 held notes by interpolation (linear, Hermite, the windowed sinc of
+  8 points), by envelope (ADSR, flex EG), on mono and stereo samples, with
+  and without a moving pitch bend, from these the cost per voice and the
+  fixed part of a block, and the start of a burst of 10 note-ons. It fails
+  when the renders of both differ by more than 1e-5 of full scale
+  (sampler-007); with `UPDATE_GOLDENS=1` it writes the golden with the old
+  fork. `--bench --android[=<adb serial>]` builds both for arm64-v8a with
+  the Android NDK (`ANDROID_NDK_HOME`, else the newest of the SDK), runs
+  them over adb (`ADB`) in `/data/local/tmp/aud_bench` on each cluster of
+  the device's cores in turn, pinned with `taskset`, and prints a table per
+  cluster.
 - `--help` lists the options, `--only=asan|plain|rtsan|tsan` runs one
-  build, and an unknown option ends the run with exit code 2.
+  build, and an unknown option, or `--android` without `--bench`, ends the
+  run with exit code 2.
   `AUD_TEST_FILTER` runs the tests whose name contains it;
   `AUD_SFIZZ_PRISTINE=<sfizz checkout>` also compares the RBJ filters with
   the Faust originals. The build cache in `.dart_tool` keeps only the

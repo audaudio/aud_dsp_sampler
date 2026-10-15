@@ -34,5 +34,43 @@ void main() {
       expect(builds, [for (final (_, ran, _) in builds) (ran, ran, 0)]);
       expect([for (final (_, ran, _) in builds) ran], everyElement(isPositive));
     }, timeout: const Timeout(Duration(minutes: 15)));
+
+    group('options', () {
+      // Runs the script with options it refuses or answers before it
+      // builds anything.
+      ProcessResult run(List<String> args) =>
+          Process.runSync('node', ['scripts/test-native.js', ...args]);
+
+      test('--help prints the usage with --android', () {
+        final result = run(['--help']);
+        expect(result.exitCode, 0, reason: '${result.stderr}');
+        expect(
+          '${result.stdout}',
+          allOf(
+            startsWith('Usage: node scripts/test-native.js [options]'),
+            contains('--android[=<adb serial>]'),
+            contains('ANDROID_NDK_HOME=<ndk>'),
+            contains('default 0.3.2'),
+          ),
+        );
+      });
+
+      for (final (args, message) in [
+        (['--android'], '--android needs --bench'),
+        (['--android=ce06193672a0ae0e057e'], '--android needs --bench'),
+        (['--bench', '--android='], 'Unknown option --android='),
+        (['--bench', '--androids'], 'Unknown option --androids'),
+      ]) {
+        test('${args.join(' ')} ends with the usage and exit code 2', () {
+          final result = run(args);
+          expect(result.exitCode, 2);
+          expect('${result.stdout}', isEmpty);
+          expect(
+            '${result.stderr}',
+            allOf(startsWith('$message\n\n'), contains('Usage:')),
+          );
+        });
+      }
+    });
   });
 }
