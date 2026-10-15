@@ -37,8 +37,18 @@
 - Add interpolation of four frames at once and skip the walks of a block
 
 - A pitch that holds over the block converts once; the positions are summed and split into indices and coefficients in one pass where cumsum() has no SIMD code
+
 - A block that ends before its loop, its loop crossfade or its sample skips the walks that wrap and end
+
 - On arm64 the Hermite interpolation computes four frames in a vector with the products and sums of a frame
+
+- The renders stay the same bit for bit
+
+- Add envelope stages rendered as a whole
+
+- A sustain of the flex EG past its stage time fills its level; the other stages sum their times first and then take their levels
+- stepSum() sums a step as a loop of float additions does, bit for bit, mostly in vector runs
+- The sustain of the ADSR fills its level
 - The renders stay the same bit for bit
 
 ## 0.3.2 - 2026-10-14

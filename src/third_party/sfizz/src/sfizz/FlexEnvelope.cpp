@@ -8,6 +8,10 @@
 // voice that is turned off, e.g. stolen, fades linearly from where it is
 // over a release time of its own (setReleaseTime) instead of running through
 // the stages after its sustain point; that release cannot be cancelled.
+// Ticket 30: a stage renders as a whole instead of frame by frame: a
+// sustain past the time of its stage fills its level, the frames of other
+// stages sum their times first (stepSum()) and then take their levels, with
+// the same results.
 
 /*
    Note(jpc): implementation status
@@ -269,13 +273,45 @@ void FlexEnvelope::Impl::process(absl::Span<float> out)
         const bool sustained = stageSustained_;
         const Curve& curve = *stageCurve_;
         size_t framesDone = 0;
-        while ((time < stageEndTime || sustained) && frameIndex < maxFrameIndex) {
+        const float inverseTime = 1.0f / stageEndTime;
+        if (frameIndex < maxFrameIndex && sustained && !freeRunning_ && !desc.dynamic
+            && (time + samplePeriod) * inverseTime >= 1.0f) {
+            // A sustain past the time of its stage, as mostly: the curve
+            // stays at its end, every frame takes its level. The time counts
+            // no more until the stage changes, which starts it from 0, so
+            // that it only keeps growing (aud_dsp_sampler, ticket 30).
             time += samplePeriod;
-            float x = time * (1.0f / stageEndTime);
-            float c = curve.evalNormalized(x);
+            const float c = curve.evalNormalized(time * inverseTime);
             level = sourceLevel + c * (targetLevel - sourceLevel);
-            out[frameIndex++] = level;
-            ++framesDone;
+            framesDone = maxFrameIndex - frameIndex;
+            fill(out.subspan(frameIndex, framesDone), level);
+            frameIndex = maxFrameIndex;
+            time += static_cast<float>(framesDone - 1) * samplePeriod;
+        } else if (frameIndex < maxFrameIndex && (time < stageEndTime || sustained)) {
+            // The times of the frames, summed as a loop sums them, then the
+            // levels, which no longer wait for each other (ticket 30). The
+            // frame whose time reaches the end of a timed stage is its last.
+            float* frame = out.data() + frameIndex;
+            const size_t room = maxFrameIndex - frameIndex;
+            stepSum(time + samplePeriod, samplePeriod, frame, static_cast<unsigned>(room));
+            size_t frames = room;
+            if (!sustained) {
+                for (size_t i = 0; i < room; ++i) {
+                    if (frame[i] >= stageEndTime) {
+                        frames = i + 1;
+                        break;
+                    }
+                }
+            }
+            time = frame[frames - 1];
+            for (size_t i = 0; i < frames; ++i) {
+                float x = frame[i] * inverseTime;
+                float c = curve.evalNormalized(x);
+                frame[i] = sourceLevel + c * (targetLevel - sourceLevel);
+            }
+            level = frame[frames - 1];
+            framesDone = frames;
+            frameIndex += frames;
         }
         currentLevel_ = level;
 

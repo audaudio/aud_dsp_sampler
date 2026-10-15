@@ -1418,7 +1418,8 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         pitchEnvelope(pitch);
 
         float baseRatio = pitchRatio_ * speedRatio_;
-        if (holds(pitch.data(), numSamples)) {
+        const bool stepHolds = holds(pitch.data(), numSamples);
+        if (stepHolds) {
             // A pitch that holds its value, as mostly: one conversion and
             // steps of one length (aud_dsp_sampler, ticket 30).
             fill<float>(*jumps, baseRatio * centsFactor(pitch[0]));
@@ -1440,23 +1441,34 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
 #else
         // The sum of the steps in order, as cumsum() sums them where it has
         // no SIMD code, split into indices and coefficients as
-        // sfzInterpolationCast() splits them, in one pass: an in-order core
-        // splits a position while it waits for the next one
-        // (aud_dsp_sampler, ticket 30).
-        const float* jump = jumps->data();
+        // sfzInterpolationCast() splits them (aud_dsp_sampler, ticket 30).
+        // Steps of one length sum mostly in runs (stepSum()); others in one
+        // pass with the split, which an in-order core does while it waits
+        // for the next sum.
+        constexpr float maxJump { 1 << 24 };
+        float* jump = jumps->data();
         int* index = indices->data();
         float* coeff = coeffs->data();
         const int start = sourcePosition_;
-        float position = jump[0];
-        for (size_t i = 0;;) {
-            constexpr float maxJump { 1 << 24 };
-            const float limitedJump = min(maxJump, position);
-            const int integral = static_cast<int>(limitedJump);
-            index[i] = integral + start;
-            coeff[i] = limitedJump - static_cast<float>(integral);
-            if (++i == numSamples)
-                break;
-            position = position + jump[i];
+        if (stepHolds && numSamples > 1) {
+            stepSum(jump[0], jump[1], jump, static_cast<unsigned>(numSamples));
+            for (size_t i = 0; i < numSamples; ++i) {
+                const float limitedJump = min(maxJump, jump[i]);
+                const int integral = static_cast<int>(limitedJump);
+                index[i] = integral + start;
+                coeff[i] = limitedJump - static_cast<float>(integral);
+            }
+        } else {
+            float position = jump[0];
+            for (size_t i = 0;;) {
+                const float limitedJump = min(maxJump, position);
+                const int integral = static_cast<int>(limitedJump);
+                index[i] = integral + start;
+                coeff[i] = limitedJump - static_cast<float>(integral);
+                if (++i == numSamples)
+                    break;
+                position = position + jump[i];
+            }
         }
 #endif
     }

@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): the
+// sustain fills its level instead of writing it frame by frame.
+
 #include "ADSREnvelope.h"
 #include "Config.h"
 #include "SIMDHelpers.h"
@@ -153,6 +156,13 @@ void ADSREnvelope::getBlockInternal(absl::Span<Float> output) noexcept
         case State::Sustain:
             if (!shouldRelease && freeRunning) {
                 shouldRelease = true;
+                break;
+            }
+            // At the sustain level, as mostly, the frames hold it
+            // (aud_dsp_sampler, ticket 30).
+            if (!(currentValue > sustain)) {
+                sfz::fill(output.first(size), currentValue);
+                count = size;
                 break;
             }
             while (count < size) {

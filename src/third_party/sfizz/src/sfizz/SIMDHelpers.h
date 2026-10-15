@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm):
+// stepSum() sums a step frame by frame as a loop does, mostly in runs a
+// vector computes.
+
 /**
  * @file SIMDHelpers.h
  * @brief This file contains useful functions to treat buffers of numerical values
@@ -634,6 +638,22 @@ void cumsum(absl::Span<const T> input, absl::Span<T> output) noexcept
     CHECK_SPAN_SIZES(input, output);
     cumsum<T>(input.data(), output.data(), minSpanSize(input, output));
 }
+
+/**
+ * @brief Sums a step onto a start frame by frame, the same bit for bit as
+ * a loop of float additions sums it, output[0] = start and output[i] =
+ * output[i - 1] + step, but most of it in runs a vector computes
+ * (aud_dsp_sampler, ticket 30): below the top of its binade, a sum adds the
+ * step rounded to the binade's ulp, so that a run is the start of the run
+ * plus multiples of that rounded step, all of them exact. The loop instead
+ * waits for each addition before the next.
+ *
+ * @param start
+ * @param step
+ * @param output
+ * @param size
+ */
+void stepSum(float start, float step, float* output, unsigned size) noexcept;
 
 // FIXME: This should go away once the changes from the resampler are in
 
