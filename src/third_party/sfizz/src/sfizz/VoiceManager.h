@@ -10,6 +10,10 @@
 // voice limit of the host (stealVoices()): released ones before held ones,
 // the oldest first, each with its sister voices. A stolen voice is no
 // attack voice for a release trigger.
+// Ticket 30: the manager keeps a bit per voice that is not idle, so that the
+// synth's walks over the voices per block and per event visit only those
+// (forEachBusyVoice()), in the order of the list, and a free voice is found
+// without a walk.
 
 #pragma once
 
@@ -21,6 +25,7 @@
 #include "Voice.h"
 #include "VoiceCount.h"
 #include "VoiceStealing.h"
+#include <cstdint>
 #include <vector>
 
 namespace sfz {
@@ -160,6 +165,32 @@ struct VoiceManager final : public Voice::StateListener
      * @return Voice*
      */
     Voice* findFreeVoice() noexcept;
+
+    /**
+     * @brief Call `visit` with each voice that is not idle, in the order of
+     * the list (aud_dsp_sampler, ticket 30). It visits what a walk over the
+     * whole list that skips the free voices visits: a voice that a visit
+     * starts behind the current one is visited too, one that it frees is
+     * not. A visit that returns true ends the walk.
+     *
+     * @param visit a functor with signature bool(Voice&)
+     * @return true if a visit ended the walk
+     */
+    template <class F>
+    bool forEachBusyVoice(F&& visit)
+    {
+        for (size_t word = 0, words = busy_.size(); word < words; ++word) {
+            uint64_t bits = busy_[word];
+            while (bits != 0) {
+                const unsigned bit = lowestBit(bits);
+                if (visit(list_[word * 64 + bit]))
+                    return true;
+                // The visit may have started or freed voices.
+                bits = busy_[word] & (~uint64_t { 0 } << bit << 1);
+            }
+        }
+        return false;
+    }
     /**
      * @brief Require a number of voices from this manager.
      * In practice, the manager will handle slightly more, in order to
@@ -185,6 +216,27 @@ private:
     std::vector<Voice> list_;
     std::vector<Voice*> activeVoices_;
     std::vector<Voice*> temp_;
+    // A bit per voice of the list that is not idle: playing, or to be
+    // cleaned up (aud_dsp_sampler, ticket 30). A voice of a disabled region
+    // goes from idle to clean up without playing, so it is not among the
+    // active voices, but it renders once.
+    std::vector<uint64_t> busy_;
+
+    void setBusy(const Voice* voice, bool busy) noexcept;
+
+    static unsigned lowestBit(uint64_t bits) noexcept
+    {
+#if defined(__GNUC__) || defined(__clang__)
+        return static_cast<unsigned>(__builtin_ctzll(bits));
+#else
+        unsigned bit = 0;
+        while ((bits & 1) == 0) {
+            bits >>= 1;
+            ++bit;
+        }
+        return bit;
+#endif
+    }
     // These are the `group=` groups where you can off voices
     absl::flat_hash_map<int, PolyphonyGroup> polyphonyGroups_;
     std::unique_ptr<VoiceStealer> stealer_ { absl::make_unique<OldestStealer>() };

@@ -20,6 +20,13 @@
 // cannot be read or the parser reports an error.
 // Ticket 29: countVoices() and stealVoices() serve a voice limit of the
 // host through the voice manager.
+// Ticket 30: the block and the events visit only the voices that are not
+// idle (VoiceManager::forEachBusyVoice()), in the order of the list, instead
+// of every voice of the list: a free voice renders nothing and ignores
+// every event. The callback breakdown times the blocks and the events only
+// once it was asked for: its clock reads cost a note-on a quarter of its
+// time; the stages of a voice are no longer timed, and the breakdown no
+// longer adds their durations, which stay 0.
 
 #include "SynthPrivate.h"
 #include "VirtualFile.h"
@@ -1219,7 +1226,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     impl.dispatchDuration_ = 0.0;
 
     { // Silence buffer
-        ScopedTiming logger { callbackBreakdown.renderMethod };
+        ScopedTiming logger { callbackBreakdown.renderMethod, ScopedTiming::Operation::replaceDuration, impl.timed() };
         buffer.fill(0.0f);
     }
 
@@ -1254,7 +1261,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     }
 
     { // Clear effect busses
-        ScopedTiming logger { callbackBreakdown.effects };
+        ScopedTiming logger { callbackBreakdown.effects, ScopedTiming::Operation::replaceDuration, impl.timed() };
         for (int i = 0; i < impl.numOutputs_; ++i) {
             for (auto& bus : impl.getEffectBusesForOutput(i)) {
                 if (bus)
@@ -1264,12 +1271,9 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     }
 
     { // Main render block
-        ScopedTiming logger { callbackBreakdown.renderMethod, ScopedTiming::Operation::addToDuration };
+        ScopedTiming logger { callbackBreakdown.renderMethod, ScopedTiming::Operation::addToDuration, impl.timed() };
 
-        for (auto& voice : impl.voiceManager_) {
-            if (voice.isFree())
-                continue;
-
+        impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
             mm.beginVoice(voice.getId(), voice.getRegion()->getId(), voice.getTriggerEvent().value);
 
             const Region* region = voice.getRegion();
@@ -1283,22 +1287,19 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
                     bus->addToInputs(*tempSpan, addGain, numFrames);
                 }
             }
-            callbackBreakdown.data += voice.getLastDataDuration();
-            callbackBreakdown.amplitude += voice.getLastAmplitudeDuration();
-            callbackBreakdown.filters += voice.getLastFilterDuration();
-            callbackBreakdown.panning += voice.getLastPanningDuration();
 
             mm.endVoice();
 
             if (voice.toBeCleanedUp())
                 voice.reset();
-        }
+            return false;
+        });
     }
 
     { // Apply effect buses
         // -- note(jpc) there is always a "main" bus which is initially empty.
         //    without any <effect>, the signal is just going to flow through it.
-        ScopedTiming logger { callbackBreakdown.effects, ScopedTiming::Operation::addToDuration };
+        ScopedTiming logger { callbackBreakdown.effects, ScopedTiming::Operation::addToDuration, impl.timed() };
 
         const int numChannels = static_cast<int>(buffer.getNumChannels());
         for (int i = 0; i < impl.numOutputs_; ++i) {
@@ -1335,7 +1336,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     impl.changedCCsThisCycle_.clear();
 
     { // Clear events and advance midi time
-        ScopedTiming logger { impl.callbackBreakdown_.dispatch, ScopedTiming::Operation::addToDuration };
+        ScopedTiming logger { impl.callbackBreakdown_.dispatch, ScopedTiming::Operation::addToDuration, impl.timed() };
         midiState.advanceTime(buffer.getNumFrames());
     }
 
@@ -1356,7 +1357,7 @@ void Synth::hdNoteOn(int delay, int noteNumber, float normalizedVelocity) noexce
     ASSERT(noteNumber < 128);
     ASSERT(noteNumber >= 0);
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     if (impl.lastKeyswitchLists_[noteNumber].empty())
         impl.resources_.getMidiState().noteOnEvent(delay, noteNumber, normalizedVelocity);
@@ -1375,7 +1376,7 @@ void Synth::hdNoteOff(int delay, int noteNumber, float normalizedVelocity) noexc
     ASSERT(noteNumber < 128);
     ASSERT(noteNumber >= 0);
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     // FIXME: Some keyboards (e.g. Casio PX5S) can send a real note-off velocity. In this case, do we have a
     // way in sfz to specify that a release trigger should NOT use the note-on velocity?
@@ -1387,8 +1388,10 @@ void Synth::hdNoteOff(int delay, int noteNumber, float normalizedVelocity) noexc
 
     const auto replacedVelocity = midiState.getNoteVelocity(noteNumber);
 
-    for (auto& voice : impl.voiceManager_)
+    impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerNoteOff(delay, noteNumber, replacedVelocity);
+        return false;
+    });
 
     impl.noteOffDispatch(delay, noteNumber, replacedVelocity);
 }
@@ -1409,13 +1412,16 @@ void Synth::Impl::startVoice(Layer* layer, int delay, const TriggerEvent& trigge
 
 void Synth::Impl::checkOffGroups(const Region* region, int delay, int number, bool chokedByCC)
 {
-    for (auto& voice : voiceManager_) {
+    // The release triggers started here are visited too when they land
+    // behind this voice, as in the walk over all voices.
+    voiceManager_.forEachBusyVoice([&](Voice& voice) {
         if (voice.checkOffGroup(region, delay, number)) {
             const TriggerEvent& event = voice.getTriggerEvent();
             if (event.type == TriggerEventType::NoteOn && !chokedByCC)
                 noteOffDispatch(delay, event.number, event.value);
         }
-    }
+        return false;
+    });
 }
 
 void Synth::Impl::noteOffDispatch(int delay, int noteNumber, float velocity) noexcept
@@ -1572,7 +1578,7 @@ void Synth::Impl::performHdcc(int delay, int ccNumber, float normValue, bool asM
     ASSERT(ccNumber < config::numCCs);
     ASSERT(ccNumber >= 0);
 
-    ScopedTiming logger { dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { dispatchDuration_, ScopedTiming::Operation::addToDuration, timed() };
 
     changedCCsThisCycle_.set(ccNumber);
 
@@ -1585,15 +1591,19 @@ void Synth::Impl::performHdcc(int delay, int ccNumber, float normValue, bool asM
         }
 
         if (ccNumber == config::allNotesOffCC || ccNumber == config::allSoundOffCC) {
-            for (auto& voice : voiceManager_)
+            voiceManager_.forEachBusyVoice([](Voice& voice) {
                 voice.reset();
+                return false;
+            });
             midiState.allNotesOff(delay);
             return;
         }
     }
 
-    for (auto& voice : voiceManager_)
+    voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerCC(delay, ccNumber, normValue);
+        return false;
+    });
 
     ccDispatch(delay, ccNumber, normValue, extendedArg);
     midiState.ccEvent(delay, ccNumber, normValue);
@@ -1632,16 +1642,17 @@ void Synth::hdPitchWheel(int delay, float normalizedPitch) noexcept
 {
     Impl& impl = *impl_;
 
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
     impl.resources_.getMidiState().pitchBendEvent(delay, normalizedPitch);
 
     for (const Impl::LayerPtr& layer : impl.layers_) {
         layer->registerPitchWheel(normalizedPitch);
     }
 
-    for (auto& voice : impl.voiceManager_) {
+    impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerPitchWheel(delay, normalizedPitch);
-    }
+        return false;
+    });
 
     impl.performHdcc(delay, ExtendedCCs::pitchBend, normalizedPitch, false);
 }
@@ -1664,7 +1675,7 @@ void Synth::channelAftertouch(int delay, int aftertouch) noexcept
 void Synth::hdChannelAftertouch(int delay, float normAftertouch) noexcept
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getMidiState().channelAftertouchEvent(delay, normAftertouch);
 
@@ -1672,9 +1683,10 @@ void Synth::hdChannelAftertouch(int delay, float normAftertouch) noexcept
         layerPtr->registerAftertouch(normAftertouch);
     }
 
-    for (auto& voice : impl.voiceManager_) {
+    impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerAftertouch(delay, normAftertouch);
-    }
+        return false;
+    });
 
     impl.performHdcc(delay, ExtendedCCs::channelAftertouch, normAftertouch, false);
 }
@@ -1688,12 +1700,14 @@ void Synth::polyAftertouch(int delay, int noteNumber, int aftertouch) noexcept
 void Synth::hdPolyAftertouch(int delay, int noteNumber, float normAftertouch) noexcept
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getMidiState().polyAftertouchEvent(delay, noteNumber, normAftertouch);
 
-    for (auto& voice : impl.voiceManager_)
+    impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerPolyAftertouch(delay, noteNumber, normAftertouch);
+        return false;
+    });
 
     impl.performHdcc(delay, ExtendedCCs::polyphonicAftertouch, normAftertouch, false, noteNumber);
 }
@@ -1701,7 +1715,7 @@ void Synth::hdPolyAftertouch(int delay, int noteNumber, float normAftertouch) no
 void Synth::tempo(int delay, float secondsPerBeat) noexcept
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getBeatClock().setTempo(delay, secondsPerBeat);
 }
@@ -1715,7 +1729,7 @@ void Synth::bpmTempo(int delay, float beatsPerMinute) noexcept
 void Synth::timeSignature(int delay, int beatsPerBar, int beatUnit)
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getBeatClock().setTimeSignature(delay, TimeSignature(beatsPerBar, beatUnit));
 }
@@ -1723,7 +1737,7 @@ void Synth::timeSignature(int delay, int beatsPerBar, int beatUnit)
 void Synth::timePosition(int delay, int bar, double barBeat)
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     BeatClock& beatClock = impl.resources_.getBeatClock();
 
@@ -1742,7 +1756,7 @@ void Synth::timePosition(int delay, int bar, double barBeat)
 void Synth::playbackState(int delay, int playbackState)
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getBeatClock().setPlaying(delay, playbackState == 1);
 }
@@ -2249,11 +2263,12 @@ void Synth::Impl::resetAllControllers(int delay) noexcept
     for (int cc = 0; cc < config::numCCs; ++cc)
         midiState.ccEvent(delay, cc, defaultCCValues_[cc]);
 
-    for (auto& voice : voiceManager_) {
+    voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerPitchWheel(delay, 0);
         for (int cc = 0; cc < config::numCCs; ++cc)
             voice.registerCC(delay, cc, defaultCCValues_[cc]);
-    }
+        return false;
+    });
 
     for (const LayerPtr& layerPtr : layers_) {
         Layer& layer = *layerPtr;
@@ -2300,6 +2315,9 @@ bool Synth::shouldReloadScala()
 const Synth::CallbackBreakdown& Synth::getCallbackBreakdown() const noexcept
 {
     Impl& impl = *impl_;
+    // The blocks and events from now on are timed (aud_dsp_sampler, ticket
+    // 30).
+    impl.breakdownAsked_.store(true, std::memory_order_relaxed);
     return impl.callbackBreakdown_;
 }
 
@@ -2307,8 +2325,10 @@ const Synth::CallbackBreakdown& Synth::getCallbackBreakdown() const noexcept
 void Synth::allSoundOff() noexcept
 {
     Impl& impl = *impl_;
-    for (auto& voice : impl.voiceManager_)
+    impl.voiceManager_.forEachBusyVoice([](Voice& voice) {
         voice.reset();
+        return false;
+    });
     for (int i = 0; i < impl.numOutputs_; ++i) {
         for (auto& effectBus : impl.getEffectBusesForOutput(i))
             if (effectBus)

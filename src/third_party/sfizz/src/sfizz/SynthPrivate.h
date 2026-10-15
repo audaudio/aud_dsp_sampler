@@ -2,9 +2,11 @@
 // synth keeps the samples and the first parser errors of its last load; the
 // time of the file pool's garbage collection is gone with it. A load removes
 // the layers it drops from every list that points at them.
+// Ticket 30: the callback breakdown is timed only once it was asked for.
 
 #pragma once
 
+#include <atomic>
 #include "Synth.h"
 #include "Effects.h"
 #include "SisterVoiceRing.h"
@@ -384,6 +386,10 @@ struct Synth::Impl final: public Parser::Listener {
 
     CallbackBreakdown callbackBreakdown_;
     double dispatchDuration_ { 0 };
+    // Whether the callback breakdown was asked for: only then the blocks and
+    // the events are timed (aud_dsp_sampler, ticket 30).
+    mutable std::atomic<bool> breakdownAsked_ { false };
+    bool timed() const noexcept { return breakdownAsked_.load(std::memory_order_relaxed); }
 
     Parser parser_;
     std::string lastPath_;

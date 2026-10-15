@@ -34,5 +34,62 @@ void main() {
       expect(builds, [for (final (_, ran, _) in builds) (ran, ran, 0)]);
       expect([for (final (_, ran, _) in builds) ran], everyElement(isPositive));
     }, timeout: const Timeout(Duration(minutes: 15)));
+
+    group('options', () {
+      // Runs the script with options it refuses or answers before it
+      // builds anything.
+      ProcessResult run(List<String> args) =>
+          Process.runSync('node', ['scripts/test-native.js', ...args]);
+
+      test('--help prints the usage with --android', () {
+        final result = run(['--help']);
+        expect(result.exitCode, 0, reason: '${result.stderr}');
+        expect(
+          '${result.stdout}',
+          allOf(
+            startsWith('Usage: node scripts/test-native.js [options]'),
+            contains('--android[=<adb serial>]'),
+            contains('ANDROID_HOME=<sdk>'),
+            contains('ANDROID_SDK_ROOT=<sdk>'),
+            contains('ANDROID_NDK_HOME=<ndk>'),
+            contains('ANDROID_NDK_ROOT=<ndk>'),
+            contains('default 0.3.2'),
+          ),
+        );
+        // The order in which the Android variables count, however the
+        // lines wrap.
+        final words = '${result.stdout}'.replaceAll(RegExp(r'\s+'), ' ');
+        expect(
+          words,
+          allOf(
+            contains(
+              'the first of ANDROID_HOME, ANDROID_SDK_ROOT and '
+              '~/Library/Android/sdk',
+            ),
+            contains(
+              'the first of ANDROID_NDK_HOME, ANDROID_NDK_ROOT and the '
+              'newest NDK of the SDK',
+            ),
+          ),
+        );
+      });
+
+      for (final (args, message) in [
+        (['--android'], '--android needs --bench'),
+        (['--android=emulator-5554'], '--android needs --bench'),
+        (['--bench', '--android='], 'Unknown option --android='),
+        (['--bench', '--androids'], 'Unknown option --androids'),
+      ]) {
+        test('${args.join(' ')} ends with the usage and exit code 2', () {
+          final result = run(args);
+          expect(result.exitCode, 2);
+          expect('${result.stdout}', isEmpty);
+          expect(
+            '${result.stderr}',
+            allOf(startsWith('$message\n\n'), contains('Usage:')),
+          );
+        });
+      }
+    });
   });
 }

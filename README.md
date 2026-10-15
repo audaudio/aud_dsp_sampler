@@ -21,6 +21,10 @@ Part of the Audanika Audio Engine; planned in [aud_audio_pm](https://github.com/
 - Playing hard does not overload the audio thread: a voice limit per node
   that changes in real time and one voice budget for all nodes of the
   process, kept by stealing voices with a fade of 10 ms (sampler-008)
+- A voice costs a third of what it cost before ticket 30: the voice loop
+  visits only the busy voices, fuses its gain and pan passes, interpolates
+  and envelopes four frames at once on arm64 and renders whole envelope
+  stages, with renders that stay the same bit for bit (sampler-009)
 - Nothing allocates on the audio thread (interop-001); the native tests
   run the node under the engine's watchdog, the RealtimeSanitizer and the
   ThreadSanitizer
@@ -56,6 +60,8 @@ one.
   with the node, its measurements and findings
 - [The plan of ticket 29](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-29-limit-the-voices-by-the-cpu-power-of-the-device.md)
   with the voice limit, the voice budget and the stealing
+- [The plan of ticket 30](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-30-render-the-sampler-voices-faster-on-the-big-cores.md)
+  with the faster voice loop and its measurements
 - The decisions behind the package:
   - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
     sfizz, forked, as the core of the sampler
@@ -67,6 +73,8 @@ one.
     the resources of the process and the sample cache budget
   - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
     the voice limit per node and the voice budget of the process
+  - [sampler-009](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-009.md):
+    the faster voice loop of the fork
   - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
     messages to nodes and their answers
   - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):
@@ -441,13 +449,24 @@ node scripts/test-native.js
   reserve, offline renders, and that a node that goes leaves no voices in
   the counts.
 - `--bench` builds the micro-benchmark `test/native/bench/sfizz_bench.cpp`
-  at -O3 with the fork of release 0.3.0 (`AUD_BENCH_BASE` names another
+  at -O3 with the fork of release 0.3.2 (`AUD_BENCH_BASE` names another
   git ref) and with the fork of now, prints what the flush of the MIDI
   state, the compressor, the gain, an idle synth and four synths cost per
-  call before and after, and fails when the renders of both differ by more
-  than 1e-6; with `UPDATE_GOLDENS=1` it writes the golden with the old fork.
+  call before and after, and since ticket 30 the voices: a block with 1, 8
+  and 32 held notes by interpolation (linear, Hermite, the windowed sinc of
+  8 points), by envelope (ADSR, flex EG), on mono and stereo samples, with
+  and without a moving pitch bend, from these the cost per voice and the
+  fixed part of a block, and the start of a burst of 10 note-ons. It fails
+  when the renders of both differ by more than 1e-5 of full scale
+  (sampler-007); with `UPDATE_GOLDENS=1` it writes the golden with the old
+  fork. `--bench --android[=<adb serial>]` builds both for arm64-v8a with
+  the Android NDK (`ANDROID_NDK_HOME`, else the newest of the SDK), runs
+  them over adb (`ADB`) in `/data/local/tmp/aud_bench` on each cluster of
+  the device's cores in turn, pinned with `taskset`, and prints a table per
+  cluster.
 - `--help` lists the options, `--only=asan|plain|rtsan|tsan` runs one
-  build, and an unknown option ends the run with exit code 2.
+  build, and an unknown option, or `--android` without `--bench`, ends the
+  run with exit code 2.
   `AUD_TEST_FILTER` runs the tests whose name contains it;
   `AUD_SFIZZ_PRISTINE=<sfizz checkout>` also compares the RBJ filters with
   the Faust originals. The build cache in `.dart_tool` keeps only the

@@ -3,6 +3,10 @@
 // This code is part of the sfizz library and is licensed under a BSD 2-clause
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
+
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): a
+// timing can be disabled, so that it reads no clock.
+
 #pragma once
 
 #include <chrono>
@@ -41,10 +45,13 @@ struct ScopedTiming
      * @param targetDuration
      * @param op
      */
-    ScopedTiming(double& targetDuration, Operation op = Operation::replaceDuration)
-    : targetDuration(targetDuration), operation(op) {}
+    ScopedTiming(double& targetDuration, Operation op = Operation::replaceDuration, bool enabled = true)
+    : targetDuration(targetDuration), operation(op), enabled(enabled),
+      creationTime(enabled ? highResNow() : TimePoint {}) {}
     ~ScopedTiming()
     {
+        if (!enabled)
+            return;
         switch(operation)
         {
         case(Operation::replaceDuration):
@@ -58,7 +65,8 @@ struct ScopedTiming
 
     double& targetDuration;
     const Operation operation;
-    const TimePoint creationTime { highResNow() };
+    const bool enabled;
+    const TimePoint creationTime;
 };
 
 }

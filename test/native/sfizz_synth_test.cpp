@@ -8,7 +8,8 @@
 // what a load keeps of the errors of its parser, how it drops the regions
 // whose samples it cannot read, and that an instrument without regions
 // loads (ticket 27); that its own polyphony leaves out the voices a voice
-// limit of the host stole (ticket 29).
+// limit of the host stole (ticket 29); that it times its blocks only once
+// the callback breakdown is asked for (ticket 30).
 
 #include <algorithm>
 #include <cmath>
@@ -128,4 +129,27 @@ AUD_TEST(sfizz_synth_polyphony_holds_beside_stolen_voices) {
   int stolen = 0;
   for (const sfz::Voice* voice : synth.getActiveVoices()) stolen += voice->isStolen() ? 1 : 0;
   AUD_CHECK(stolen == 1);
+}
+
+// ############################################################################
+// The callback breakdown (ticket 30)
+
+AUD_TEST(sfizz_synth_times_its_blocks_once_the_breakdown_is_asked_for) {
+  // Its clock reads cost a note-on a quarter of its time: a synth times its
+  // blocks and events only once the breakdown was asked for, and never the
+  // stages of a voice.
+  sfz::Synth synth;
+  synth.setSamplesPerBlock(256);
+  AUD_CHECK(synth.loadSfzString("/aud_dsp_sampler/sines.sfz", "<region> sample=*sine\n"));
+  std::vector<float> left(256);
+  std::vector<float> right(256);
+  float* channels[2] = {left.data(), right.data()};
+  synth.noteOn(0, 60, 100);
+  synth.renderBlock(sfz::AudioSpan<float>(channels, 2, 0, 256));
+  const sfz::Synth::CallbackBreakdown& breakdown = synth.getCallbackBreakdown();
+  AUD_CHECK(breakdown.dispatch == 0 && breakdown.renderMethod == 0 && breakdown.effects == 0);
+  synth.noteOn(0, 64, 100);
+  synth.renderBlock(sfz::AudioSpan<float>(channels, 2, 0, 256));
+  AUD_CHECK(synth.getCallbackBreakdown().renderMethod > 0);
+  AUD_CHECK(breakdown.data == 0 && breakdown.amplitude == 0 && breakdown.filters == 0 && breakdown.panning == 0);
 }

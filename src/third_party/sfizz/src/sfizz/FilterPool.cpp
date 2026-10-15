@@ -1,3 +1,7 @@
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): the
+// modulations are read through const pointers: a target may hand out the
+// buffer of its single source (ModMatrix::getModulation()).
+
 #include "FilterPool.h"
 #include "Region.h"
 #include "Resources.h"
@@ -81,19 +85,19 @@ void sfz::FilterHolder::process(const float** inputs, float** outputs, unsigned 
         return;
 
     fill<float>(*cutoffSpan, baseCutoff);
-    if (float* mod = mm.getModulation(cutoffTarget)) {
+    if (const float* mod = mm.getModulation(cutoffTarget)) {
         for (size_t i = 0; i < numFrames; ++i)
             (*cutoffSpan)[i] *= centsFactor(mod[i]);
     }
     sfz::clampAll(*cutoffSpan, Default::filterCutoff.bounds);
 
     fill<float>(*resonanceSpan, baseResonance);
-    if (float* mod = mm.getModulation(resonanceTarget))
-        add<float>(absl::Span<float>(mod, numFrames), *resonanceSpan);
+    if (const float* mod = mm.getModulation(resonanceTarget))
+        add<float>(absl::Span<const float>(mod, numFrames), *resonanceSpan);
 
     fill<float>(*gainSpan, baseGain);
-    if (float* mod = mm.getModulation(gainTarget))
-        add<float>(absl::Span<float>(mod, numFrames), *gainSpan);
+    if (const float* mod = mm.getModulation(gainTarget))
+        add<float>(absl::Span<const float>(mod, numFrames), *gainSpan);
 
     if (!prepared) {
         filter->prepare(cutoffSpan->front(), resonanceSpan->front(), gainSpan->front());

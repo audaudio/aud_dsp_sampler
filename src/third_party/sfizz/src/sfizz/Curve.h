@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): the
+// points of a curve can be read, for a flex EG that evaluates four frames at
+// once.
+
 #pragma once
 #include "absl/types/span.h"
 #include "MathHelpers.h"
@@ -48,6 +52,15 @@ public:
     float evalNormalized(float value) const
     {
         return evalCC7(value * 127.0f);
+    }
+
+    /**
+     * @brief The points of the curve at 0 to 127, which evalCC7()
+     *        interpolates (aud_dsp_sampler, ticket 30)
+     */
+    const float* points() const noexcept
+    {
+        return _points.data();
     }
 
     /**

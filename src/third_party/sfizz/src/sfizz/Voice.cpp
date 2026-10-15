@@ -23,6 +23,19 @@
 // fades out linearly over the frames the host gives, after its normal
 // rendering; at the end of the fade it is cleaned up like a voice whose
 // envelope ended, without the 50 ms fade of the envelope.
+// Ticket 30: fewer passes over a block with the same products. The gains of
+// the amplitude stage take one pass; the gain, the pan, the width and the
+// position take one more when they hold their values (panMono(),
+// panStereo()); a region without crossfade controllers skips the crossfade;
+// the power follower runs only for the stealer that reads it. The stages
+// of a voice are no longer timed for the callback breakdown. A pitch that
+// holds its value converts once; the positions are summed and split in one
+// pass where cumsum() has no SIMD code; a block that reaches no end of its
+// loop or sample skips the walks that look for one; on arm64 the Hermite
+// interpolation takes four frames at once (fillHermite()). The fused and
+// the separate pan passes share their make-up gains (kPanCompensation3dB,
+// kPanCompensation6dB). The modulations are read through const pointers:
+// a target may hand out the buffer of its source.
 
 #include "Voice.h"
 #include "Layer.h"
@@ -58,7 +71,120 @@
 #include <absl/types/span.h>
 #include <random>
 
+#if SFIZZ_HAVE_NEON && SFIZZ_CPU_FAMILY_AARCH64
+#include <arm_neon.h>
+#define SFIZZ_AUD_HERMITE_NEON 1
+#else
+#define SFIZZ_AUD_HERMITE_NEON 0
+#endif
+
 namespace sfz {
+
+namespace {
+
+// The gains that make up for the -3dB of a pan stage, 10^(3/20), and of the
+// two of a stereo source, 10^(6/20): the fused and the separate passes must
+// take the same float (aud_dsp_sampler, ticket 30).
+constexpr float kPanCompensation3dB { 1.4125375446227544f };
+constexpr float kPanCompensation6dB { 1.9952623149688797f };
+
+// Whether every value equals the first: a reduction without an early exit,
+// which the compiler vectorizes (aud_dsp_sampler, ticket 30).
+bool holds(const float* values, size_t size) noexcept
+{
+    const float first = values[0];
+    bool held = true;
+    for (size_t i = 1; i < size; ++i)
+        held &= values[i] == first;
+    return held;
+}
+
+#if SFIZZ_AUD_HERMITE_NEON
+// The Hermite interpolation of four frames at once (aud_dsp_sampler, ticket
+// 30): a vector holds a tap of four frames instead of the four taps of a
+// frame, with the products and sums of Interpolator<kInterpolatorHermite3>,
+// whose vaddvq_f32 adds (tap -1 + tap 0) + (tap 1 + tap 2). A coefficient
+// lies in [0, 1), so that the taps 0 and 1 lie within 1 of the position and
+// take the inner polynomial of hermite3x4(), the taps -1 and 2 lie within
+// 1 to 2 and take the outer one; both are 0 at 1, where they meet.
+
+inline float32x4_t hermiteInner(float32x4_t x)
+{
+    const float32x4_t x2 = vmulq_f32(x, x);
+    const float32x4_t x3 = vmulq_f32(x2, x);
+    const float32x4_t q = vmulq_f32(vdupq_n_f32(5.0f / 2.0f), x2);
+    return vaddq_f32(vsubq_f32(vdupq_n_f32(1.0f), q), vmulq_f32(vdupq_n_f32(3.0f / 2.0f), x3));
+}
+
+inline float32x4_t hermiteOuter(float32x4_t x)
+{
+    const float32x4_t x2 = vmulq_f32(x, x);
+    const float32x4_t x3 = vmulq_f32(x2, x);
+    const float32x4_t q = vmulq_f32(vdupq_n_f32(5.0f / 2.0f), x2);
+    const float32x4_t p = vsubq_f32(vdupq_n_f32(2.0f), vmulq_f32(vdupq_n_f32(4.0f), x));
+    return vsubq_f32(vaddq_f32(p, q), vmulq_f32(vdupq_n_f32(1.0f / 2.0f), x3));
+}
+
+// The weights of the taps -1 to 2 of four frames.
+struct HermiteWeights {
+    float32x4_t w[4];
+};
+
+inline HermiteWeights hermiteWeights(float32x4_t coeff)
+{
+    HermiteWeights h;
+    h.w[0] = hermiteOuter(vabsq_f32(vsubq_f32(vdupq_n_f32(-1.0f), coeff)));
+    h.w[1] = hermiteInner(vabsq_f32(vsubq_f32(vdupq_n_f32(0.0f), coeff)));
+    h.w[2] = hermiteInner(vabsq_f32(vsubq_f32(vdupq_n_f32(1.0f), coeff)));
+    h.w[3] = hermiteOuter(vabsq_f32(vsubq_f32(vdupq_n_f32(2.0f), coeff)));
+    return h;
+}
+
+// The frames of a source at four indices, interpolated.
+inline float32x4_t hermiteFrames(const float* source, const int* index, const HermiteWeights& h)
+{
+    // The taps around each index, transposed into a vector per tap.
+    const float32x4_t r0 = vld1q_f32(source + index[0] - 1);
+    const float32x4_t r1 = vld1q_f32(source + index[1] - 1);
+    const float32x4_t r2 = vld1q_f32(source + index[2] - 1);
+    const float32x4_t r3 = vld1q_f32(source + index[3] - 1);
+    const float32x4_t t0 = vtrn1q_f32(r0, r1);
+    const float32x4_t t1 = vtrn2q_f32(r0, r1);
+    const float32x4_t t2 = vtrn1q_f32(r2, r3);
+    const float32x4_t t3 = vtrn2q_f32(r2, r3);
+    const float32x4_t v0 = vreinterpretq_f32_f64(vtrn1q_f64(vreinterpretq_f64_f32(t0), vreinterpretq_f64_f32(t2)));
+    const float32x4_t v1 = vreinterpretq_f32_f64(vtrn1q_f64(vreinterpretq_f64_f32(t1), vreinterpretq_f64_f32(t3)));
+    const float32x4_t v2 = vreinterpretq_f32_f64(vtrn2q_f64(vreinterpretq_f64_f32(t0), vreinterpretq_f64_f32(t2)));
+    const float32x4_t v3 = vreinterpretq_f32_f64(vtrn2q_f64(vreinterpretq_f64_f32(t1), vreinterpretq_f64_f32(t3)));
+    const float32x4_t below = vaddq_f32(vmulq_f32(h.w[0], v0), vmulq_f32(h.w[1], v1));
+    const float32x4_t above = vaddq_f32(vmulq_f32(h.w[2], v2), vmulq_f32(h.w[3], v3));
+    return vaddq_f32(below, above);
+}
+
+// Fills `dest` from `source` at the positions of `indices` and `coeffs`,
+// four frames at once and the rest one by one, as
+// fillInterpolated<kInterpolatorHermite3, false>() fills it.
+void fillHermite(const AudioSpan<const float>& source, const AudioSpan<float>& dest,
+    absl::Span<const int> indices, absl::Span<const float> coeffs) noexcept
+{
+    const size_t size = indices.size();
+    const size_t channels = source.getNumChannels() == 1 ? 1 : 2;
+    const int* index = indices.data();
+    const float* coeff = coeffs.data();
+    size_t i = 0;
+    for (; i + 4 <= size; i += 4) {
+        const HermiteWeights h = hermiteWeights(vld1q_f32(coeff + i));
+        for (size_t c = 0; c < channels; ++c)
+            vst1q_f32(dest.getChannel(c) + i, hermiteFrames(source.getChannel(c), index + i, h));
+    }
+    for (; i < size; ++i) {
+        for (size_t c = 0; c < channels; ++c)
+            dest.getChannel(c)[i] = interpolate<kInterpolatorHermite3>(&source.getChannel(c)[index[i]], coeff[i]);
+    }
+}
+#endif
+
+} // namespace
 
 struct Voice::Impl
 {
@@ -137,18 +263,39 @@ struct Voice::Impl
      */
     void ampStageMono(AudioSpan<float> buffer) noexcept;
     /**
-     * @brief Amplitude stage for a stereo source
-     *
-     * @param buffer
-     */
-    void ampStageStereo(AudioSpan<float> buffer) noexcept;
-    /**
-     * @brief Amplitude stage for a mono source
+     * @brief Pan stage for a mono source
      *
      * @param buffer
      */
     void panStageMono(AudioSpan<float> buffer) noexcept;
+    /** @brief Pan, width and position stage for a stereo source */
     void panStageStereo(AudioSpan<float> buffer) noexcept;
+    /**
+     * @brief Amplitude and pan stage for a mono source without filters, in
+     * one pass when the pan holds its value (aud_dsp_sampler, ticket 30)
+     *
+     * @param buffer
+     */
+    void ampPanStageMono(AudioSpan<float> buffer) noexcept;
+    /**
+     * @brief Amplitude and pan stage for a stereo source, in one pass when
+     * the pan, the width and the position hold their values
+     * (aud_dsp_sampler, ticket 30)
+     *
+     * @param buffer
+     */
+    void ampPanStageStereo(AudioSpan<float> buffer) noexcept;
+    /**
+     * @brief Whether the modulation of a pan, a width or a position holds
+     * its value over the block, or there is none (aud_dsp_sampler, ticket
+     * 30); adds that value to `value`, as the stage adds the modulation to
+     * its base.
+     *
+     * @param target
+     * @param numSamples
+     * @param value the base of the stage
+     */
+    bool heldModulation(ModMatrix::TargetId target, size_t numSamples, float& value) noexcept;
     /**
      * @brief Amplitude stage for a mono source
      *
@@ -178,9 +325,10 @@ struct Voice::Impl
 
     /**
      * @brief Save the modulation targets to avoid recomputing them in every callback.
-     * Must be called during startVoice() ideally.
+     * Must be called during startVoice() ideally. The layer keeps them for
+     * the next voice (aud_dsp_sampler, ticket 30).
      */
-    void saveModulationTargets(const Region* region) noexcept;
+    void saveModulationTargets(Layer& layer) noexcept;
 
     /**
      * @brief Get the sample quality determined by the active region.
@@ -320,10 +468,12 @@ struct Voice::Impl
     float waveLeftGain_[config::oscillatorsPerVoice] {};
     float waveRightGain_[config::oscillatorsPerVoice] {};
 
-    double dataDuration_;
-    double amplitudeDuration_;
-    double panningDuration_;
-    double filterDuration_;
+    // No longer measured: two clock reads per stage cost a voice more than
+    // some of its stages on Android (aud_dsp_sampler, ticket 30).
+    double dataDuration_ { 0.0 };
+    double amplitudeDuration_ { 0.0 };
+    double panningDuration_ { 0.0 };
+    double filterDuration_ { 0.0 };
 
     fast_real_distribution<float> uniformNoiseDist_ { -config::uniformNoiseBounds, config::uniformNoiseBounds };
     fast_gaussian_generator<float> gaussianNoiseDist_ { 0.0f, config::noiseVariance };
@@ -558,7 +708,7 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
 
     ModMatrix& modMatrix = resources.getModMatrix();
     modMatrix.initVoice(impl.id_, region.getId(), impl.initialDelay_);
-    impl.saveModulationTargets(&region);
+    impl.saveModulationTargets(*layer);
 
     if (region.checkSustain) {
         const bool sustainPressed =
@@ -865,18 +1015,18 @@ void Voice::renderBlock(AudioSpan<float, 2> buffer) noexcept
     auto delayed_buffer = buffer.subspan(delay);
     impl.initialDelay_ -= static_cast<int>(delay);
 
-    { // Fill buffer with raw data
-        ScopedTiming logger { impl.dataDuration_ };
-        if (region->isOscillator())
-            impl.fillWithGenerator(delayed_buffer);
-        else
-            impl.fillWithData(delayed_buffer);
-    }
+    // Fill buffer with raw data
+    if (region->isOscillator())
+        impl.fillWithGenerator(delayed_buffer);
+    else
+        impl.fillWithData(delayed_buffer);
 
     if (region->isStereo()) {
-        impl.ampStageStereo(buffer);
-        impl.panStageStereo(buffer);
+        impl.ampPanStageStereo(buffer);
         impl.filterStageStereo(buffer);
+    } else if (region->filters.empty() && region->equalizers.empty()) {
+        // Nothing between the amplitude and the pan: one pass for both.
+        impl.ampPanStageMono(buffer);
     } else {
         impl.ampStageMono(buffer);
         impl.filterStageMono(buffer);
@@ -895,7 +1045,10 @@ void Voice::renderBlock(AudioSpan<float, 2> buffer) noexcept
             impl.switchState(State::cleanMeUp);
     }
 
-    impl.powerFollower_.process(buffer);
+    // Only the stealer by envelope and age reads the power; enabling the
+    // follower clears it (aud_dsp_sampler, ticket 30).
+    if (impl.followPower_)
+        impl.powerFollower_.process(buffer);
 
     impl.age_ += buffer.getNumFrames();
     if (impl.triggerDelay_) {
@@ -934,6 +1087,12 @@ void Voice::Impl::resetCrossfades() noexcept
 
 void Voice::Impl::applyCrossfades(absl::Span<float> modulationSpan) noexcept
 {
+    // Without crossfades the gain is 1 throughout - its smoother rests at
+    // the 1 of resetCrossfades() - and a product with 1 changes nothing
+    // (aud_dsp_sampler, ticket 30).
+    if (region_->crossfadeCCInRange.empty() && region_->crossfadeCCOutRange.empty())
+        return;
+
     const auto numSamples = modulationSpan.size();
     const auto xfCurve = region_->crossfadeCCCurve;
 
@@ -978,34 +1137,96 @@ void Voice::Impl::amplitudeEnvelope(absl::Span<float> modulationSpan) noexcept
 
     ModMatrix& mm = resources_.getModMatrix();
 
-    // Amplitude EG
-    absl::Span<const float> ampegOut(mm.getModulation(masterAmplitudeTarget_), numSamples);
-    ASSERT(ampegOut.data());
-    copy(ampegOut, modulationSpan);
+    // The amplitude EG, the base gain, the amplitude, the base volume and
+    // the volume in one pass, with the products of a pass each one after
+    // the other (aud_dsp_sampler, ticket 30).
+    const float* ampegOut = mm.getModulation(masterAmplitudeTarget_);
+    ASSERT(ampegOut);
+    const float* amplitudeMod = mm.getModulation(amplitudeTarget_);
+    const float* volumeMod = mm.getModulation(volumeTarget_);
+    const float baseGain = baseGain_;
+    const float volumeGain = db2mag(baseVolumedB_);
+    float* gains = modulationSpan.data();
 
-    // Amplitude envelope
-    applyGain1<float>(baseGain_, modulationSpan);
-    if (float* mod = mm.getModulation(amplitudeTarget_)) {
-        for (size_t i = 0; i < numSamples; ++i)
-            modulationSpan[i] *= mod[i];
-    }
+    // The gains of the frames from `begin` to `end` at the gain of a
+    // volume modulation. Without one it is 1, by which a product changes no
+    // bit.
+    auto fillGains = [&](size_t begin, size_t end, float volume) {
+        for (size_t i = begin; i < end; ++i) {
+            float gain = baseGain * ampegOut[i];
+            if (amplitudeMod)
+                gain *= amplitudeMod[i];
+            gains[i] = (volumeGain * gain) * volume;
+        }
+    };
 
-    // Volume envelope
-    applyGain1<float>(db2mag(baseVolumedB_), modulationSpan);
-    if (float* mod = mm.getModulation(volumeTarget_)) {
-        auto gainOfDb = cacheSameArgument([](float dB) { return db2mag(dB); });
-        for (size_t i = 0; i < numSamples; ++i)
-            modulationSpan[i] *= gainOfDb(mod[i]);
+    if (!volumeMod) {
+        fillGains(0, numSamples, 1.0f);
+    } else if (numSamples > 0 && holds(volumeMod, numSamples)) {
+        // The volume holds its value, as mostly: one conversion.
+        fillGains(0, numSamples, db2mag(volumeMod[0]));
+    } else {
+        // A run of equal volumes converts once, as the cache of ticket 28
+        // did, and its loop vectorizes.
+        size_t i = 0;
+        while (i < numSamples) {
+            const float dB = volumeMod[i];
+            size_t end = i + 1;
+            while (end < numSamples && volumeMod[end] == dB)
+                ++end;
+            fillGains(i, end, db2mag(dB));
+            i = end;
+        }
     }
 
     // Smooth the gain transitions
     gainSmoother_.process(modulationSpan, modulationSpan);
 }
 
+void Voice::Impl::ampPanStageMono(AudioSpan<float> buffer) noexcept
+{
+    const auto numSamples = buffer.getNumFrames();
+    const auto leftBuffer = buffer.getSpan(0);
+    const auto rightBuffer = buffer.getSpan(1);
+
+    BufferPool& bufferPool = resources_.getBufferPool();
+
+    auto modulationSpan = bufferPool.getBuffer(numSamples);
+    if (!modulationSpan)
+        return;
+
+    amplitudeEnvelope(*modulationSpan);
+    applyCrossfades(*modulationSpan);
+
+    // Every region has a pan on CC 10; it mostly holds its value.
+    float pan = region_->pan;
+    if (!heldModulation(panTarget_, numSamples, pan)) {
+        applyGain<float>(*modulationSpan, leftBuffer);
+        panStageMono(buffer);
+        return;
+    }
+
+    // The gain, the copy to the right, the pan and the +3dB of
+    // panStageMono() in one pass.
+    panMono(pan, kPanCompensation3dB, modulationSpan->data(), leftBuffer.data(),
+        rightBuffer.data(), static_cast<unsigned>(numSamples));
+}
+
+bool Voice::Impl::heldModulation(ModMatrix::TargetId target, size_t numSamples, float& value) noexcept
+{
+    const float* mod = resources_.getModMatrix().getModulation(target);
+    if (!mod || numSamples == 0)
+        return true;
+
+    if (!holds(mod, numSamples))
+        return false;
+    // The sum of the stage's envelope.
+    value += mod[0];
+    return true;
+}
+
 void Voice::Impl::ampStageMono(AudioSpan<float> buffer) noexcept
 {
-    ScopedTiming logger { amplitudeDuration_ };
-
     const auto numSamples = buffer.getNumFrames();
     const auto leftBuffer = buffer.getSpan(0);
 
@@ -1020,10 +1241,8 @@ void Voice::Impl::ampStageMono(AudioSpan<float> buffer) noexcept
     applyGain<float>(*modulationSpan, leftBuffer);
 }
 
-void Voice::Impl::ampStageStereo(AudioSpan<float> buffer) noexcept
+void Voice::Impl::ampPanStageStereo(AudioSpan<float> buffer) noexcept
 {
-    ScopedTiming logger { amplitudeDuration_ };
-
     BufferPool& bufferPool = resources_.getBufferPool();
 
     const auto numSamples = buffer.getNumFrames();
@@ -1033,13 +1252,25 @@ void Voice::Impl::ampStageStereo(AudioSpan<float> buffer) noexcept
 
     amplitudeEnvelope(*modulationSpan);
     applyCrossfades(*modulationSpan);
-    buffer.applyGain(*modulationSpan);
+
+    float pan = region_->pan;
+    float width = region_->width;
+    float position = region_->position;
+    if (!heldModulation(panTarget_, numSamples, pan) || !heldModulation(widthTarget_, numSamples, width)
+        || !heldModulation(positionTarget_, numSamples, position)) {
+        buffer.applyGain(*modulationSpan);
+        panStageStereo(buffer);
+        return;
+    }
+
+    // The gain, the pan, the width, the position and the +6dB of
+    // panStageStereo() in one pass.
+    panStereo(pan, width, position, kPanCompensation6dB, modulationSpan->data(),
+        buffer.getChannel(0), buffer.getChannel(1), static_cast<unsigned>(numSamples));
 }
 
 void Voice::Impl::panStageMono(AudioSpan<float> buffer) noexcept
 {
-    ScopedTiming logger { panningDuration_ };
-
     const auto numSamples = buffer.getNumFrames();
     const auto leftBuffer = buffer.getSpan(0);
     const auto rightBuffer = buffer.getSpan(1);
@@ -1057,20 +1288,19 @@ void Voice::Impl::panStageMono(AudioSpan<float> buffer) noexcept
 
     // Apply panning
     fill(*modulationSpan, region_->pan);
-    if (float* mod = mm.getModulation(panTarget_)) {
+    if (const float* mod = mm.getModulation(panTarget_)) {
         for (size_t i = 0; i < numSamples; ++i)
             (*modulationSpan)[i] += mod[i];
     }
     pan(*modulationSpan, leftBuffer, rightBuffer);
 
     // add +3dB (10^(3/20)) to compensate for the pan stage (-3dB per stage)
-    applyGain1(1.4125375446227544f, leftBuffer);
-    applyGain1(1.4125375446227544f, rightBuffer);
+    applyGain1(kPanCompensation3dB, leftBuffer);
+    applyGain1(kPanCompensation3dB, rightBuffer);
 }
 
 void Voice::Impl::panStageStereo(AudioSpan<float> buffer) noexcept
 {
-    ScopedTiming logger { panningDuration_ };
     const auto numSamples = buffer.getNumFrames();
     const auto leftBuffer = buffer.getSpan(0);
     const auto rightBuffer = buffer.getSpan(1);
@@ -1085,7 +1315,7 @@ void Voice::Impl::panStageStereo(AudioSpan<float> buffer) noexcept
 
     // Apply panning
     fill(*modulationSpan, region_->pan);
-    if (float* mod = mm.getModulation(panTarget_)) {
+    if (const float* mod = mm.getModulation(panTarget_)) {
         for (size_t i = 0; i < numSamples; ++i)
             (*modulationSpan)[i] += mod[i];
     }
@@ -1093,27 +1323,26 @@ void Voice::Impl::panStageStereo(AudioSpan<float> buffer) noexcept
 
     // Apply the width/position process
     fill(*modulationSpan, region_->width);
-    if (float* mod = mm.getModulation(widthTarget_)) {
+    if (const float* mod = mm.getModulation(widthTarget_)) {
         for (size_t i = 0; i < numSamples; ++i)
             (*modulationSpan)[i] += mod[i];
     }
     width(*modulationSpan, leftBuffer, rightBuffer);
 
     fill(*modulationSpan, region_->position);
-    if (float* mod = mm.getModulation(positionTarget_)) {
+    if (const float* mod = mm.getModulation(positionTarget_)) {
         for (size_t i = 0; i < numSamples; ++i)
             (*modulationSpan)[i] += mod[i];
     }
     pan(*modulationSpan, leftBuffer, rightBuffer);
 
     // add +6dB (10^(6/20)) to compensate for the 2 pan stages (-3dB per stage)
-    applyGain1(1.9952623149688797f, leftBuffer);
-    applyGain1(1.9952623149688797f, rightBuffer);
+    applyGain1(kPanCompensation6dB, leftBuffer);
+    applyGain1(kPanCompensation6dB, rightBuffer);
 }
 
 void Voice::Impl::filterStageMono(AudioSpan<float> buffer) noexcept
 {
-    ScopedTiming logger { filterDuration_ };
     const auto numSamples = buffer.getNumFrames();
     const auto leftBuffer = buffer.getSpan(0);
     const float* inputChannel[1] { leftBuffer.data() };
@@ -1129,7 +1358,6 @@ void Voice::Impl::filterStageMono(AudioSpan<float> buffer) noexcept
 
 void Voice::Impl::filterStageStereo(AudioSpan<float> buffer) noexcept
 {
-    ScopedTiming logger { filterDuration_ };
     const auto numSamples = buffer.getNumFrames();
     const auto leftBuffer = buffer.getSpan(0);
     const auto rightBuffer = buffer.getSpan(1);
@@ -1197,18 +1425,51 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         pitchEnvelope(pitch);
 
         float baseRatio = pitchRatio_ * speedRatio_;
-        auto ratioOfCents = cacheSameArgument([](float cents) { return centsFactor(cents); });
-        for (size_t i = 0; i < numSamples; ++i)
-            (*jumps)[i] = baseRatio * ratioOfCents(pitch[i]);
+        const bool stepHolds = holds(pitch.data(), numSamples);
+        if (stepHolds) {
+            // A pitch that holds its value, as mostly: one conversion and
+            // steps of one length (aud_dsp_sampler, ticket 30).
+            fill<float>(*jumps, baseRatio * centsFactor(pitch[0]));
+        } else {
+            auto ratioOfCents = cacheSameArgument([](float cents) { return centsFactor(cents); });
+            for (size_t i = 0; i < numSamples; ++i)
+                (*jumps)[i] = baseRatio * ratioOfCents(pitch[i]);
+        }
 
         // Take the first sample if the voice just started
         if (age_ == 0)
             jumps->front() = 0.0f;
 
         jumps->front() += floatPositionOffset_;
+#if SFIZZ_CPU_FAMILY_X86_64 || SFIZZ_CPU_FAMILY_I386
         cumsum<float>(*jumps, *jumps);
         sfzInterpolationCast<float>(*jumps, *indices, *coeffs);
         add1<int>(sourcePosition_, *indices);
+#else
+        // The sum of the steps in order, as cumsum() sums them where it has
+        // no SIMD code, split into indices and coefficients as
+        // sfzInterpolationCast() splits them (splitPosition(),
+        // aud_dsp_sampler, ticket 30). Steps of one length sum mostly in
+        // runs (stepSum()); others in one pass with the split, which an
+        // in-order core does while it waits for the next sum.
+        float* jump = jumps->data();
+        int* index = indices->data();
+        float* coeff = coeffs->data();
+        const int start = sourcePosition_;
+        if (stepHolds && numSamples > 1) {
+            stepSum(jump[0], jump[1], jump, static_cast<unsigned>(numSamples));
+            for (size_t i = 0; i < numSamples; ++i)
+                splitPosition(jump[i], start, index[i], coeff[i]);
+        } else {
+            float position = jump[0];
+            for (size_t i = 0;;) {
+                splitPosition(position, start, index[i], coeff[i]);
+                if (++i == numSamples)
+                    break;
+                position = position + jump[i];
+            }
+        }
+#endif
     }
 
     // Update loop characteristics with the current CC state
@@ -1221,6 +1482,15 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
     const bool loopContinuous = (region_->loopMode == LoopMode::loop_continuous);
     const bool loopSustain = (region_->loopMode == LoopMode::loop_sustain) && !released();
     const bool shouldLoop = hasLoopSamples && (loopSustain || loopContinuous) && !loopCountReached;
+    const auto sampleEnd = min( int(sampleEnd_), int(currentPromise_->information.end), trueFrames) - 1;
+
+    // The indices never fall: a block whose last index lies before the loop
+    // crossfade and the end of the loop, or before the end of the sample,
+    // wraps, restarts and ends nothing and is one plain partition, which the
+    // walks below find frame by frame (aud_dsp_sampler, ticket 30).
+    const bool reachesNoEnd = shouldLoop
+        ? indices->back() < loop.xfOutStart && indices->back() <= loop.end
+        : indices->back() < sampleEnd;
 
     /*
                loop start             loop end
@@ -1242,7 +1512,7 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
     enum PartitionType { kPartitionNormal, kPartitionLoopXfade };
 
     SpanHolder<absl::Span<int>> partitionBuffers[2];
-    if (shouldLoop) {
+    if (shouldLoop && !reachesNoEnd) {
         for (auto& buf : partitionBuffers) {
             buf = bufferPool.getIndexBuffer(numSamples);
             if (!buf)
@@ -1259,8 +1529,6 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         partitionTypes = absl::MakeSpan(const_cast<int*>(types), 1);
         numPartitions = 1;
     }
-
-    const auto sampleEnd = min( int(sampleEnd_), int(currentPromise_->information.end), trueFrames) - 1;
 
     int blockRestarts { 0 };
     int oldIndex {};
@@ -1282,7 +1550,9 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         oldPartitionType = partitionType;
     };
 
-    if (shouldLoop) {
+    if (reachesNoEnd) {
+        // Nothing to wrap or end.
+    } else if (shouldLoop) {
         unsigned i = 0;
         while (i < numSamples) {
             int wrappedIndex = (*indices)[i] - loop.size * blockRestarts;
@@ -1484,6 +1754,13 @@ void Voice::Impl::fillInterpolated(
     absl::Span<const int> indices, absl::Span<const float> coeffs,
     absl::Span<const float> addingGains)
 {
+#if SFIZZ_AUD_HERMITE_NEON
+    IF_CONSTEXPR (M == kInterpolatorHermite3 && !Adding) {
+        fillHermite(source, dest, indices, coeffs);
+        return;
+    }
+#endif
+
     auto* ind = indices.data();
     auto* coeff = coeffs.data();
     auto* addingGain = addingGains.data();
@@ -2119,7 +2396,7 @@ void Voice::Impl::pitchEnvelope(absl::Span<float> pitchSpan) noexcept
 
     ModMatrix& mm = resources_.getModMatrix();
 
-    if (float* mod = mm.getModulation(pitchTarget_))
+    if (const float* mod = mm.getModulation(pitchTarget_))
         add<float>(absl::MakeSpan(mod, numFrames), pitchSpan);
 }
 
@@ -2129,18 +2406,32 @@ void Voice::Impl::resetSmoothers() noexcept
     gainSmoother_.reset(0.0f);
 }
 
-void Voice::Impl::saveModulationTargets(const Region* region) noexcept
+void Voice::Impl::saveModulationTargets(Layer& layer) noexcept
 {
-    ModMatrix& mm = resources_.getModMatrix();
-    masterAmplitudeTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::MasterAmplitude, region->getId()));
-    amplitudeTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Amplitude, region->getId()));
-    volumeTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Volume, region->getId()));
-    panTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Pan, region->getId()));
-    positionTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Position, region->getId()));
-    widthTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Width, region->getId()));
-    pitchTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Pitch, region->getId()));
-    oscillatorDetuneTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::OscillatorDetune, region->getId()));
-    oscillatorModDepthTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::OscillatorModDepth, region->getId()));
+    Layer::ModulationTargets& targets = layer.modulationTargets_;
+    if (!targets.found) {
+        const Region* region = &layer.getRegion();
+        ModMatrix& mm = resources_.getModMatrix();
+        targets.masterAmplitude = mm.findTarget(ModKey::createNXYZ(ModId::MasterAmplitude, region->getId()));
+        targets.amplitude = mm.findTarget(ModKey::createNXYZ(ModId::Amplitude, region->getId()));
+        targets.volume = mm.findTarget(ModKey::createNXYZ(ModId::Volume, region->getId()));
+        targets.pan = mm.findTarget(ModKey::createNXYZ(ModId::Pan, region->getId()));
+        targets.position = mm.findTarget(ModKey::createNXYZ(ModId::Position, region->getId()));
+        targets.width = mm.findTarget(ModKey::createNXYZ(ModId::Width, region->getId()));
+        targets.pitch = mm.findTarget(ModKey::createNXYZ(ModId::Pitch, region->getId()));
+        targets.oscillatorDetune = mm.findTarget(ModKey::createNXYZ(ModId::OscillatorDetune, region->getId()));
+        targets.oscillatorModDepth = mm.findTarget(ModKey::createNXYZ(ModId::OscillatorModDepth, region->getId()));
+        targets.found = true;
+    }
+    masterAmplitudeTarget_ = targets.masterAmplitude;
+    amplitudeTarget_ = targets.amplitude;
+    volumeTarget_ = targets.volume;
+    panTarget_ = targets.pan;
+    positionTarget_ = targets.position;
+    widthTarget_ = targets.width;
+    pitchTarget_ = targets.pitch;
+    oscillatorDetuneTarget_ = targets.oscillatorDetune;
+    oscillatorModDepthTarget_ = targets.oscillatorModDepth;
 }
 
 void Voice::enablePowerFollower() noexcept

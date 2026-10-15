@@ -19,12 +19,14 @@
 // without changes only links and executes. Each build keeps only the
 // objects and the binary of its last run. The options are in `usage` below.
 //
-// --bench builds the micro-benchmark of ticket 28 instead
+// --bench builds the micro-benchmark of tickets 28 and 30 instead
 // (test/native/bench/sfizz_bench.cpp) twice at -O3, like the build hook:
 // with the fork of sfizz of a release before the change and with the fork of
-// now. It prints what the hot spots of an app's audio thread cost per call
-// before and after, and compares the renders of the app's instrument of
-// both builds.
+// now. It prints what the hot spots of an app's audio thread and the voices
+// cost before and after, and compares the renders of the app's instrument
+// and of its variants of both builds. With --android it builds both for
+// arm64-v8a with the NDK, runs them over adb on each cluster of the
+// device's cores in turn, and prints a table per cluster.
 
 'use strict';
 
@@ -40,8 +42,20 @@ const root = path.resolve(__dirname, '..');
 const variants = ['asan', 'plain', 'rtsan', 'tsan'];
 
 // The release whose fork of sfizz --bench measures as before: the last one
-// before ticket 28 made the hot spots of the audio thread faster.
-const benchBaseDefault = '0.3.0';
+// before ticket 30 makes the voices faster.
+const benchBaseDefault = '0.3.2';
+
+// How far the renders of the two forks may lie apart, of full scale:
+// sampler-007 lets an optimization change the output within the golden
+// tolerance of the family, where sampler-006 kept every bit.
+const renderTolerance = 1e-5;
+
+// What --android builds the benchmark for: arm64-v8a on Android 10, the
+// system of the reference tablet.
+const androidTarget = 'aarch64-linux-android29';
+
+// The folder of --android on the device; the run touches nothing outside.
+const androidFolder = '/data/local/tmp/aud_bench';
 
 const usage = `Usage: node scripts/test-native.js [options]
 
@@ -51,7 +65,11 @@ const usage = `Usage: node scripts/test-native.js [options]
   --no-rtsan        skip the rtsan build
   --no-tsan         skip the thread sanitizer
   --only=<build>    one build: ${variants.join(', ')}
-  --bench           the benchmark of the fork before and after ticket 28
+  --bench           the benchmark of the fork of a release before and of
+                    the fork of now
+  --android[=<adb serial>]
+                    with --bench: on an arm64 Android device, on each
+                    cluster of its cores
   --help            this text
 
   AUD_TEST_FILTER=<part of a name>     run the matching tests only
@@ -63,6 +81,17 @@ const usage = `Usage: node scripts/test-native.js [options]
                                        on macOS, beside LLVM's dsymutil
   AUD_BENCH_BASE=<git ref>             the fork --bench compares with,
                                        default ${benchBaseDefault}
+  ANDROID_HOME=<sdk>
+  ANDROID_SDK_ROOT=<sdk>               the Android SDK of --android, the
+                                       first of ANDROID_HOME,
+                                       ANDROID_SDK_ROOT and
+                                       ~/Library/Android/sdk
+  ANDROID_NDK_HOME=<ndk>
+  ANDROID_NDK_ROOT=<ndk>               the NDK of --android, the first of
+                                       ANDROID_NDK_HOME, ANDROID_NDK_ROOT
+                                       and the newest NDK of the SDK
+  ADB=<adb>                            the adb of --android, default
+                                       platform-tools/adb in the SDK
   UPDATE_GOLDENS=1                     --bench writes the golden of the
                                        app's instrument with that fork
 `;
@@ -77,6 +106,8 @@ function parseArgs(argv) {
     noTsan: false,
     only: '',
     bench: false,
+    // The serial of --android, '' for the only device adb sees, or null.
+    android: null,
   };
   for (const arg of argv) {
     if (arg === '--help') {
@@ -94,10 +125,18 @@ function parseArgs(argv) {
       options.only = arg.slice(7);
     } else if (arg === '--bench') {
       options.bench = true;
+    } else if (arg === '--android') {
+      options.android = '';
+    } else if (arg.startsWith('--android=') && arg.length > 10) {
+      options.android = arg.slice(10);
     } else {
       process.stderr.write(`Unknown option ${arg}\n\n${usage}`);
       process.exit(2);
     }
+  }
+  if (options.android !== null && !options.bench) {
+    process.stderr.write(`--android needs --bench\n\n${usage}`);
+    process.exit(2);
   }
   return options;
 }
@@ -328,7 +367,8 @@ async function compileAll(name, compiler, variantFlags, context) {
     // sfizz and its externals warn in headers the node includes.
     ...context.systemIncludes.flatMap((directory) => ['-isystem', directory]),
   ];
-  if (process.arch === 'x64') common.push('-mavx');
+  // A build for another machine than this one names its architecture.
+  if ((context.arch ?? process.arch) === 'x64') common.push('-mavx');
   const jobs = units(context).map(({ file, flags }) => {
     const all = [...common, ...flags];
     const hash = createHash('sha256');
@@ -379,7 +419,8 @@ async function build(name, compiler, variantFlags, context) {
   );
   if (!fs.existsSync(binary)) {
     const flags = [...variantFlags, ...objects, '-o', binary];
-    if (process.platform !== 'win32') flags.push('-lpthread');
+    if (context.linkFlags) flags.push(...context.linkFlags);
+    else if (process.platform !== 'win32') flags.push('-lpthread');
     const result = spawnSync(compiler, flags, { encoding: 'utf8' });
     if (result.status !== 0) {
       process.stderr.write(result.stdout + result.stderr);
@@ -516,6 +557,18 @@ function benchContext(sfizz) {
   };
 }
 
+// The measurements by name in the output of a benchmark.
+function benchRows(output) {
+  const rows = new Map();
+  for (const line of output.split('\n')) {
+    const text = line.trim();
+    if (!text.startsWith('AUD_BENCH ')) continue;
+    const row = JSON.parse(text.slice('AUD_BENCH '.length));
+    rows.set(row.name, row.ns);
+  }
+  return rows;
+}
+
 // Runs a benchmark binary; returns its measurements by name. The renders
 // land in `folder`.
 function runBench(name, binary, folder) {
@@ -531,13 +584,7 @@ function runBench(name, binary, folder) {
     process.stderr.write(result.stdout + result.stderr);
     process.exit(result.status ?? 1);
   }
-  const rows = new Map();
-  for (const line of result.stdout.split('\n')) {
-    if (!line.startsWith('AUD_BENCH ')) continue;
-    const row = JSON.parse(line.slice('AUD_BENCH '.length));
-    rows.set(row.name, row.ns);
-  }
-  return rows;
+  return benchRows(result.stdout);
 }
 
 // The samples of a WAV file of 32-bit floats.
@@ -573,36 +620,21 @@ function renderDifference(a, b) {
 }
 
 function formatNs(ns) {
-  if (ns >= 1e6) return `${(ns / 1e6).toFixed(2)} ms`;
-  if (ns >= 1e3) return `${(ns / 1e3).toFixed(2)} µs`;
+  if (Math.abs(ns) >= 1e6) return `${(ns / 1e6).toFixed(2)} ms`;
+  if (Math.abs(ns) >= 1e3) return `${(ns / 1e3).toFixed(2)} µs`;
   return `${ns.toFixed(1)} ns`;
 }
 
-// Builds and runs the benchmark before and after, prints the table and
-// compares the renders; fails when they differ by more than 1e-6.
-async function bench() {
-  const compiler = 'clang++';
-  if (!works(compiler, [])) throw new Error('clang++ is missing');
-  const base = process.env.AUD_BENCH_BASE || benchBaseDefault;
-  const builds = [
-    ['bench-before', forkAt(base)],
-    ['bench-after', path.join(root, 'src', 'third_party', 'sfizz')],
-  ];
-  const results = [];
-  for (const [name, sfizz] of builds) {
-    const binary = await build(name, compiler, [], benchContext(sfizz));
-    const folder = path.join(outDirOf(name), 'renders');
-    results.push({ name, folder, rows: runBench(name, binary, folder) });
-  }
-  const [before, after] = results;
-  const names = [...before.rows.keys()];
+// Prints the measurements of both builds side by side under `title`.
+function printTable(title, before, after) {
+  const names = [...before.keys()];
   const width = Math.max(...names.map((n) => n.length));
   const header = `${'per call'.padEnd(width)} | ${'before'.padStart(10)} | ${'after'.padStart(10)} | speedup`;
-  process.stdout.write(`\nThe fork of ${base} (before) and of now (after), -O3:\n\n`);
+  process.stdout.write(`\n${title}:\n\n`);
   process.stdout.write(`${header}\n${'-'.repeat(header.length)}\n`);
   for (const name of names) {
-    const a = before.rows.get(name);
-    const b = after.rows.get(name);
+    const a = before.get(name);
+    const b = after.get(name);
     const speedup = a / b;
     process.stdout.write(
       `${name.padEnd(width)} | ${formatNs(a).padStart(10)} | ${formatNs(b).padStart(10)} | ` +
@@ -610,30 +642,278 @@ async function bench() {
     );
   }
   process.stdout.write('\n');
-  let failed = false;
-  for (const render of ['render-golden.wav', 'render-bend.wav']) {
-    const difference = renderDifference(
-      wavSamples(path.join(before.folder, render)),
-      wavSamples(path.join(after.folder, render)),
-    );
+}
+
+// Compares every render of the build before with the same of the build
+// after; returns whether one differs by more than the tolerance or is
+// missing.
+function rendersDiffer(beforeFolder, afterFolder) {
+  const renders = fs
+    .readdirSync(beforeFolder)
+    .filter((file) => /^render-.*\.wav$/.test(file))
+    .sort();
+  let differ = renders.length === 0;
+  for (const render of renders) {
+    const after = path.join(afterFolder, render);
+    const difference = fs.existsSync(after)
+      ? renderDifference(
+          wavSamples(path.join(beforeFolder, render)),
+          wavSamples(after),
+        )
+      : { bits: Infinity, largest: Infinity };
     process.stdout.write(
       `${render}: ${difference.bits} samples differ in their bits, ` +
         `by at most ${difference.largest}\n`,
     );
-    if (!(difference.largest <= 1e-6)) failed = true;
+    if (!(difference.largest <= renderTolerance)) differ = true;
   }
+  return differ;
+}
+
+// Ends the run when the renders of the two forks differ.
+function failOnDifferentRenders(differ) {
+  if (!differ) return;
+  process.stderr.write(
+    `bench: the renders differ by more than ${renderTolerance}\n`,
+  );
+  process.exit(1);
+}
+
+// The fork of the release before, at AUD_BENCH_BASE, and the fork of now,
+// each with the side of the table it measures.
+function benchForks() {
+  const base = process.env.AUD_BENCH_BASE || benchBaseDefault;
+  return {
+    base,
+    forks: [
+      ['before', forkAt(base)],
+      ['after', path.join(root, 'src', 'third_party', 'sfizz')],
+    ],
+  };
+}
+
+// Builds and runs the benchmark before and after on this machine, prints
+// the table and compares the renders.
+async function bench() {
+  const compiler = 'clang++';
+  if (!works(compiler, [])) throw new Error('clang++ is missing');
+  const { base, forks } = benchForks();
+  const results = [];
+  for (const [side, sfizz] of forks) {
+    const name = `bench-${side}`;
+    const binary = await build(name, compiler, [], benchContext(sfizz));
+    const folder = path.join(outDirOf(name), 'renders');
+    results.push({ folder, rows: runBench(name, binary, folder) });
+  }
+  const [before, after] = results;
+  printTable(
+    `The fork of ${base} (before) and of now (after), -O3`,
+    before.rows,
+    after.rows,
+  );
+  const differ = rendersDiffer(before.folder, after.folder);
   if (process.env.UPDATE_GOLDENS === '1') {
     const golden = path.join(root, 'test', 'goldens', 'sfizz_app_instrument.wav');
     fs.copyFileSync(path.join(before.folder, 'render-golden.wav'), golden);
     process.stdout.write(`wrote ${path.relative(root, golden)} with the fork of ${base}\n`);
   }
-  if (failed) {
-    process.stderr.write('bench: the renders differ by more than 1e-6\n');
-    process.exit(1);
+  failOnDifferentRenders(differ);
+}
+
+// ............................................................................
+// The benchmark on an Android device (ticket 30)
+
+// The Android SDK of --android: ANDROID_HOME, else ANDROID_SDK_ROOT, the
+// variables of the SDK's tools, else where Android Studio installs it on
+// macOS.
+function androidSdk() {
+  return (
+    process.env.ANDROID_HOME ||
+    process.env.ANDROID_SDK_ROOT ||
+    path.join(os.homedir(), 'Library', 'Android', 'sdk')
+  );
+}
+
+// The NDK of --android: ANDROID_NDK_HOME, else ANDROID_NDK_ROOT, which
+// older tools set, else the newest one of the SDK.
+function androidNdk() {
+  const ndk = process.env.ANDROID_NDK_HOME || process.env.ANDROID_NDK_ROOT;
+  if (ndk) return ndk;
+  const ndks = path.join(androidSdk(), 'ndk');
+  const versions = fs.existsSync(ndks)
+    ? fs.readdirSync(ndks).filter((name) => /^\d+(\.\d+)*$/.test(name))
+    : [];
+  if (versions.length === 0) {
+    throw new Error(
+      `No NDK: set ANDROID_NDK_HOME or ANDROID_NDK_ROOT or install one into ${ndks}`,
+    );
   }
+  const parts = (version) => version.split('.').map(Number);
+  versions.sort((a, b) => {
+    const [pa, pb] = [parts(a), parts(b)];
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+    }
+    return 0;
+  });
+  return path.join(ndks, versions[versions.length - 1]);
+}
+
+// The clang++ of the NDK, which builds for Android by its --target.
+function ndkCompiler(ndk) {
+  const prebuilt = path.join(ndk, 'toolchains', 'llvm', 'prebuilt');
+  const name = process.platform === 'win32' ? 'clang++.exe' : 'clang++';
+  const hosts = fs.existsSync(prebuilt) ? fs.readdirSync(prebuilt) : [];
+  const compiler = hosts
+    .map((host) => path.join(prebuilt, host, 'bin', name))
+    .find((file) => fs.existsSync(file));
+  if (!compiler) throw new Error(`${ndk} has no clang++`);
+  return compiler;
+}
+
+// Runs adb with `args` on the device; fails the run when adb fails, unless
+// `mayFail`.
+function adb(device, args, mayFail = false) {
+  const serial = device.serial === '' ? [] : ['-s', device.serial];
+  const result = spawnSync(device.adb, [...serial, ...args], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error) throw new Error(`${device.adb}: ${result.error.message}`);
+  if (result.status !== 0 && !mayFail) {
+    process.stderr.write(
+      `adb ${args.join(' ')} failed:\n${result.stdout}${result.stderr}`,
+    );
+    process.exit(result.status ?? 1);
+  }
+  return result;
+}
+
+// The clusters of the device's cores: the cores grouped by their highest
+// clock, the slowest cluster first. Cores that are offline have no cpufreq
+// and are left out.
+function cpuClusters(device) {
+  const script =
+    'for c in /sys/devices/system/cpu/cpu[0-9]*; do ' +
+    'echo ${c##*cpu} $(cat $c/cpufreq/cpuinfo_max_freq 2>/dev/null); done';
+  const byClock = new Map();
+  for (const line of adb(device, ['shell', script]).stdout.split('\n')) {
+    const [cpu, khz] = line.trim().split(/\s+/).map(Number);
+    if (!Number.isInteger(cpu) || !(khz > 0)) continue;
+    byClock.set(khz, [...(byClock.get(khz) ?? []), cpu]);
+  }
+  if (byClock.size === 0) throw new Error('The device shows no cpufreq');
+  return [...byClock.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([khz, cpus]) => {
+      cpus.sort((a, b) => a - b);
+      const mask = cpus.reduce((bits, cpu) => bits | (1n << BigInt(cpu)), 0n);
+      const contiguous = cpus[cpus.length - 1] - cpus[0] === cpus.length - 1;
+      const name =
+        cpus.length === 1
+          ? `cpu${cpus[0]}`
+          : contiguous
+            ? `cpu${cpus[0]}-${cpus[cpus.length - 1]}`
+            : `cpu${cpus.join(',')}`;
+      return { name, ghz: (khz / 1e6).toFixed(2), mask: mask.toString(16) };
+    });
+}
+
+// Puts `binary` into the folder of its build on the device unless it is
+// there already; returns its path there. The folder holds only the binary
+// of the last run, like the build's folder on this machine.
+function pushBench(device, name, binary) {
+  const folder = `${androidFolder}/${name}`;
+  const remote = `${folder}/${path.basename(binary)}`;
+  const probe = adb(device, ['shell', `test -x ${remote} && echo there`], true);
+  if (probe.stdout.trim() === 'there') return remote;
+  adb(device, ['shell', `rm -rf ${folder} && mkdir -p ${folder}`]);
+  adb(device, ['push', binary, remote]);
+  adb(device, ['shell', `chmod 755 ${remote}`]);
+  return remote;
+}
+
+// Runs the benchmark at `remote` on the device, pinned to the cores of
+// `cluster`; returns its measurements by name. The renders are pulled into
+// `folder`.
+function runAndroidBench(device, name, remote, cluster, folder) {
+  const renders = `${path.posix.dirname(remote)}/renders`;
+  process.stdout.write(
+    `${name}: ${path.posix.basename(remote)} on ${cluster.name}\n`,
+  );
+  adb(device, ['shell', `rm -rf ${renders} && mkdir -p ${renders}`]);
+  const result = adb(
+    device,
+    ['shell', `taskset ${cluster.mask} ${remote} ${renders}`],
+    true,
+  );
+  if (result.status !== 0) {
+    process.stderr.write(result.stdout + result.stderr);
+    process.exit(result.status ?? 1);
+  }
+  const files = adb(device, ['shell', `ls ${renders}`])
+    .stdout.split('\n')
+    .map((file) => file.trim())
+    .filter((file) => /^render-.*\.wav$/.test(file));
+  fs.rmSync(folder, { recursive: true, force: true });
+  fs.mkdirSync(folder, { recursive: true });
+  if (files.length > 0) {
+    adb(device, ['pull', ...files.map((file) => `${renders}/${file}`), folder]);
+  }
+  return benchRows(result.stdout);
+}
+
+// Builds the benchmark before and after for arm64-v8a, runs both on each
+// cluster of the device's cores in turn, never two at once, and prints a
+// table per cluster; compares the renders of each.
+async function benchAndroid(serial) {
+  const device = {
+    adb: process.env.ADB || path.join(androidSdk(), 'platform-tools', 'adb'),
+    serial,
+  };
+  const abis = adb(device, ['shell', 'getprop ro.product.cpu.abilist']).stdout;
+  if (!abis.includes('arm64-v8a')) {
+    throw new Error(`The device runs ${abis.trim()}, not arm64-v8a`);
+  }
+  const compiler = ndkCompiler(androidNdk());
+  const { base, forks } = benchForks();
+  const builds = [];
+  for (const [side, sfizz] of forks) {
+    const name = `bench-android-${side}`;
+    const context = {
+      ...benchContext(sfizz),
+      arch: 'arm64',
+      // The C++ runtime linked in, like the hook does: the NDK's shared one
+      // is not on the device.
+      linkFlags: ['-static-libstdc++'],
+    };
+    const target = [`--target=${androidTarget}`];
+    const binary = await build(name, compiler, target, context);
+    builds.push({ name, remote: pushBench(device, name, binary) });
+  }
+  let differ = false;
+  for (const cluster of cpuClusters(device)) {
+    const [before, after] = builds.map(({ name, remote }) => {
+      const folder = path.join(outDirOf(name), `renders-${cluster.name}`);
+      const rows = runAndroidBench(device, name, remote, cluster, folder);
+      return { folder, rows };
+    });
+    printTable(
+      `The fork of ${base} (before) and of now (after), -O3, ` +
+        `${androidTarget} on ${cluster.name} at ${cluster.ghz} GHz`,
+      before.rows,
+      after.rows,
+    );
+    if (rendersDiffer(before.folder, after.folder)) differ = true;
+  }
+  failOnDifferentRenders(differ);
 }
 
 async function main() {
+  if (options.bench && options.android !== null) {
+    await benchAndroid(options.android);
+    return;
+  }
   if (options.bench) {
     await bench();
     return;

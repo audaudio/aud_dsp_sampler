@@ -1,3 +1,7 @@
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): a
+// check over fewer candidates than the polyphony finds no voice to steal
+// without a walk over them; the walk counts at most every candidate.
+
 #include "VoiceStealing.h"
 #include "SisterVoiceRing.h"
 
@@ -18,6 +22,9 @@ namespace sfz {
 template<class F, class G>
 Voice* genericPolyphonyCheck(absl::Span<Voice*> candidates, unsigned polyphony, F&& voiceCond, G&& candidateCond)
 {
+    if (candidates.size() < polyphony)
+        return {};
+
     Voice* candidate = nullptr;
     unsigned numPlaying = 0;
     for (const auto& voice : candidates) {
@@ -131,6 +138,9 @@ sfz::Voice* stealEnvelopeAndAge(absl::Span<Voice*> voices) noexcept
 Voice* EnvelopeAndAgeStealer::checkRegionPolyphony(const Region* region, absl::Span<Voice*> candidates)
 {
     ASSERT(region);
+    if (candidates.size() < region->polyphony)
+        return {};
+
     temp_.clear();
     absl::c_copy_if(candidates, std::back_inserter(temp_), [=](Voice* v) {
             return (!ignoreVoice(v) && v->getRegion() == region);
@@ -144,6 +154,9 @@ Voice* EnvelopeAndAgeStealer::checkRegionPolyphony(const Region* region, absl::S
 
 Voice* EnvelopeAndAgeStealer::checkPolyphony(absl::Span<Voice*> candidates, unsigned maxPolyphony)
 {
+    if (candidates.size() < maxPolyphony)
+        return {};
+
     temp_.clear();
     absl::c_copy_if(candidates, std::back_inserter(temp_), [=](Voice* v) {
             return !ignoreVoice(v);

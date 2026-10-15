@@ -4,6 +4,12 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): a
+// target with a single source at depth 1 hands out the buffer of the source
+// instead of a copy of it; its callers only read it, through the const
+// pointer getModulation() returns. A target that a cycle of modulations
+// reads while it computes keeps the copy.
+
 #include "ModMatrix.h"
 #include "ModId.h"
 #include "ModKey.h"
@@ -50,6 +56,12 @@ struct ModMatrix::Impl {
         absl::flat_hash_map<uint32_t, ConnectionData> connectedSources;
         bool bufferReady {};
         Buffer<float> buffer;
+        // What getModulation() hands out once the target is ready: the
+        // buffer, or that of its single source (aud_dsp_sampler, ticket 30).
+        const float* data {};
+        // Whether the target computes, and whether a cycle read it then.
+        bool computing {};
+        bool cyclic {};
     };
 
     absl::flat_hash_map<ModKey, uint32_t> sourceIndex_;
@@ -383,7 +395,7 @@ void ModMatrix::endVoice()
     impl.currentVoiceTriggerValue_ = 0.0f;
 }
 
-float* ModMatrix::getModulation(TargetId targetId)
+const float* ModMatrix::getModulation(TargetId targetId)
 {
     if (!validTarget(targetId))
         return nullptr;
@@ -403,12 +415,23 @@ float* ModMatrix::getModulation(TargetId targetId)
         return nullptr;
 
     // check if already processed
-    if (target.bufferReady)
-        return buffer.data();
+    if (target.bufferReady) {
+        // A cycle reads the target while it computes: from now on its
+        // buffer holds what it hands out, as before ticket 30.
+        if (target.computing)
+            target.cyclic = true;
+        return target.data;
+    }
 
     // set the ready flag to prevent a cycle
     // in case there is, be sure to initialize the buffer
     target.bufferReady = true;
+    target.computing = true;
+    target.data = buffer.data();
+
+    // The buffer of a first source at depth 1, handed out unless a further
+    // source follows (aud_dsp_sampler, ticket 30).
+    const float* single = nullptr;
 
     auto sourcesPos = target.connectedSources.begin();
     auto sourcesEnd = target.connectedSources.end();
@@ -428,6 +451,13 @@ float* ModMatrix::getModulation(TargetId targetId)
         if (useThisSource) {
             absl::Span<float> sourceBuffer(source.buffer.data(), numFrames);
 
+            // A further source: the first one goes into the buffer first,
+            // where it was before ticket 30 while this one generates.
+            if (single) {
+                copy(absl::Span<const float>(single, numFrames), buffer);
+                single = nullptr;
+            }
+
             // unless source is already done, process it
             if (!source.bufferReady) {
                 source.gen->generate(source.key, impl.currentVoiceId_, sourceBuffer);
@@ -444,7 +474,7 @@ float* ModMatrix::getModulation(TargetId targetId)
 
             if (isFirstSource) {
                 if (sourceDepth == 1 && !sourceDepthMod)
-                    copy(absl::Span<const float>(sourceBuffer), buffer);
+                    single = sourceBuffer.data();
                 else if (!sourceDepthMod) {
                     for (uint32_t i = 0; i < numFrames; ++i)
                         buffer[i] = sourceDepth * sourceBuffer[i];
@@ -494,7 +524,15 @@ float* ModMatrix::getModulation(TargetId targetId)
         }
     }
 
-    return buffer.data();
+    target.computing = false;
+    if (single) {
+        if (target.cyclic)
+            copy(absl::Span<const float>(single, numFrames), buffer);
+        else
+            target.data = single;
+    }
+
+    return target.data;
 }
 
 bool ModMatrix::validTarget(TargetId id) const

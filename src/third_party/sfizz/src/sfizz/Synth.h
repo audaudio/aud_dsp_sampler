@@ -13,6 +13,9 @@
 // read or its parser reports an error; it plays nothing.
 // Ticket 29: countVoices() and stealVoices() let a host keep the voices
 // that sound below a limit of its own while the synth renders.
+// Ticket 30: getCallbackBreakdown() starts the timing of the blocks and the
+// events, so that its first call returns zeros; the stages of a voice are
+// not timed.
 
 #pragma once
 #include "AudioSpan.h"
@@ -737,6 +740,11 @@ public:
     /**
      * @brief View the callback breakdown for the last frame.
      * Call from the real-time thread after a renderBlock call.
+     *
+     * The timing starts only after the first call, so that call returns
+     * zeros: the clock reads cost a note-on a quarter of its time
+     * (aud_dsp_sampler, ticket 30). The stages of a voice are not timed:
+     * data, amplitude, filters and panning stay 0.
      *
      * @return const CallbackBreakdown&
      */

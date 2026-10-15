@@ -12,7 +12,9 @@
 // the render compares it with the golden the original code rendered, and
 // the benchmark of scripts/test-native.js --bench renders it with the code
 // of a release before the change and with the code of now. Only the public
-// API of sfizz, so that both compile it.
+// API of sfizz, so that both compile it. The benchmark of ticket 30 also
+// plays variants of it: other opcodes in the group, which choose the
+// envelope and the interpolation, and stereo samples.
 
 #ifndef SFIZZ_APP_INSTRUMENT_HPP
 #define SFIZZ_APP_INSTRUMENT_HPP
@@ -81,30 +83,54 @@ inline std::vector<float> readWav(const std::string& file)
     return {};
 }
 
+// The opcodes of the group of the app's instruments: the flex EG for the
+// amplitude, with the ADSR envelope beside it that eg1_ampeg=1 replaces.
+const char* const kAppGroup =
+    "ampeg_attack=0.005 ampeg_release=0.3 ampeg_sustain=100 eg1_ampeg=1 "
+    "eg1_sustain=1 eg1_time1=0.005 eg1_level1=1 eg1_shape1=0 eg1_time2=0.3 "
+    "eg1_level2=0 eg1_shape2=0";
+
+// What a variant of the instrument changes: the opcodes of its group, the
+// channels of its samples, and whether the main bus has the app's limiter.
+// The default is the app's instrument.
+struct Variant {
+    std::string group = kAppGroup;
+    int channels = 1;
+    bool limiter = true;
+};
+
 // Writes one second of a sine on every root into `directory` and returns
 // the SFZ text that plays them. A sine of whole cycles per second loops
-// without a click.
-inline std::string writeInstrument(const std::string& directory)
+// without a click. Stereo samples hold the sine a quarter cycle ahead on
+// the right, in files of their own.
+inline std::string writeInstrument(const std::string& directory, const Variant& variant = Variant())
 {
     std::string text =
         "<control>\n"
         "set_hdcc7=0.7\n"
         "<curve> curve_index=7 v000=-128 v010=-40 v017=-30 v029=-20 v038=-15 v051=-10 "
-        "v064=-6 v076=-3 v089=0 v108=3 v127=6\n"
-        "<effect> bus=main type=comp comp_attack=0 comp_release=0.05 comp_ratio=50 "
-        "comp_threshold=-0.5 comp_stlink=0\n"
-        "<effect> bus=main type=gain gain=7.35\n"
+        "v064=-6 v076=-3 v089=0 v108=3 v127=6\n";
+    if (variant.limiter) {
+        text +=
+            "<effect> bus=main type=comp comp_attack=0 comp_release=0.05 comp_ratio=50 "
+            "comp_threshold=-0.5 comp_stlink=0\n"
+            "<effect> bus=main type=gain gain=7.35\n";
+    }
+    text +=
         "<global> global_volume=-2 volume_oncc7=1 volume_curvecc7=7 volume_smoothcc7=10\n"
-        "<group> ampeg_attack=0.005 ampeg_release=0.3 ampeg_sustain=100 eg1_ampeg=1 "
-        "eg1_sustain=1 eg1_time1=0.005 eg1_level1=1 eg1_shape1=0 eg1_time2=0.3 "
-        "eg1_level2=0 eg1_shape2=0\n";
+        "<group> " + variant.group + "\n";
+    const int channels = variant.channels;
     for (int root : kRoots) {
         const double frequency = std::round(440.0 * std::pow(2.0, (root - 69) / 12.0));
-        std::vector<float> sine(kSampleRate);
-        for (int i = 0; i < kSampleRate; ++i)
-            sine[i] = static_cast<float>(0.5 * std::sin(2 * M_PI * frequency * i / kSampleRate));
-        const std::string name = "sine" + std::to_string(root) + ".wav";
-        if (!writeWav(directory + "/" + name, sine, 1))
+        std::vector<float> sine(static_cast<size_t>(kSampleRate) * channels);
+        for (int i = 0; i < kSampleRate; ++i) {
+            for (int c = 0; c < channels; ++c)
+                sine[i * channels + c] =
+                    static_cast<float>(0.5 * std::sin(2 * M_PI * frequency * i / kSampleRate + c * M_PI / 2));
+        }
+        const std::string name =
+            "sine" + std::to_string(root) + (channels == 1 ? "" : "-" + std::to_string(channels)) + ".wav";
+        if (!writeWav(directory + "/" + name, sine, channels))
             return "";
         text += "<region> sample=" + name + " lokey=" + std::to_string(root - 3) +
             " hikey=" + std::to_string(root + 2) + " pitch_keycenter=" + std::to_string(root) +

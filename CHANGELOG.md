@@ -1,5 +1,95 @@
 # Changelog
 
+## 0.3.3 - 2026-10-15
+
+### Added
+
+- Add a native bench of the voice loop by interpolation, envelope and voice start
+
+- The cost per voice and the fixed part of a block with 1, 8 and 32 held notes, by interpolation quality, flex EG or ADSR, mono or stereo, with and without pitch bend
+
+- The extra of a block that starts a burst of 10 note-ons
+
+- Renders of every variant compared within 1e-5 of full scale (sampler-007) against release 0.3.2
+
+- --bench --android builds both forks with the NDK and runs them on each CPU cluster of a device
+
+- Add a walk over the busy voices only, per block and per event
+
+- The voice manager keeps a bit per voice that is not idle; the render loop and the loops of note-offs, controllers, pitch bend, aftertouch, off groups, all notes off and all sound off visit only those, in the order of the list
+
+- findFreeVoice() takes the first idle voice without a walk
+
+- The renders stay the same bit for bit
+
+- Add fused amplitude and pan passes of a voice
+
+- The gains of the amplitude stage take one pass; gain, pan, width, position and compensation take one more when they hold over the block (panMono(), panStereo())
+
+- A region without crossfade controllers skips the crossfade; the power follower runs only for the stealer that reads it
+
+- A modulation target with one source at depth 1 hands out the source buffer instead of a copy, a cycle keeps the copy
+
+- The stages of a voice are no longer timed for the callback breakdown
+
+- The renders stay the same bit for bit
+
+- Add interpolation of four frames at once and skip the walks of a block
+
+- A pitch that holds over the block converts once; the positions are summed and split into indices and coefficients in one pass where cumsum() has no SIMD code
+
+- A block that ends before its loop, its loop crossfade or its sample skips the walks that wrap and end
+
+- On arm64 the Hermite interpolation computes four frames in a vector with the products and sums of a frame
+
+- The renders stay the same bit for bit
+
+- Add envelope stages rendered as a whole
+
+- A sustain of the flex EG past its stage time fills its level; the other stages sum their times first and then take their levels
+
+- stepSum() sums a step as a loop of float additions does, bit for bit, mostly in vector runs
+
+- The sustain of the ADSR fills its level
+
+- The renders stay the same bit for bit
+
+- Add a voice start without walks, lookups and clock reads
+
+- A polyphony check over fewer candidates than its limit finds no voice to steal without walking them
+
+- A layer keeps the modulation targets of its region instead of nine lookups per start; a file identifier hashes its name once
+
+- The callback breakdown times blocks and events only once it was asked for
+
+- The renders and the voices stay the same bit for bit
+
+- Add the levels of a flex EG stage four frames at once
+
+- On arm64 the levels of a timed stage are computed for four frames at once, which mostly share the two points of the curve
+
+- A block that ends before its stage skips the search for the end; stepSum() takes sums below 16 steps in a plain loop
+
+- The renders stay the same bit for bit
+
+- Add the faster voice loop to the README and the index
+
+- The goals and the documentation name sampler-009 and the plan of ticket 30
+
+- Add the fixes of the review of ticket 30
+
+- getModulation() hands out const buffers; native tests prove the single-source shortcut, the copy before a further source and the cycle against the computation of before
+
+- Named gains of the pan compensation, one loop of the amplitude gains, splitPosition() shared with the interpolation cast
+
+- The callback breakdown no longer adds the stage times that stay 0, and its docs say when it times
+
+- The stepSum() test lives in sfizz_simd_helpers_test.cpp; the bench picks its configs by name
+
+- test-native.js finds the Android SDK and NDK through ANDROID_HOME, ANDROID_SDK_ROOT, ANDROID_NDK_HOME and ANDROID_NDK_ROOT; the script test uses no real device serial
+
+- The German README names the interpolation and the envelope
+
 ## 0.3.2 - 2026-10-14
 
 ### Added
