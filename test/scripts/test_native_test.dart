@@ -49,15 +49,34 @@ void main() {
           allOf(
             startsWith('Usage: node scripts/test-native.js [options]'),
             contains('--android[=<adb serial>]'),
+            contains('ANDROID_HOME=<sdk>'),
+            contains('ANDROID_SDK_ROOT=<sdk>'),
             contains('ANDROID_NDK_HOME=<ndk>'),
+            contains('ANDROID_NDK_ROOT=<ndk>'),
             contains('default 0.3.2'),
+          ),
+        );
+        // The order in which the Android variables count, however the
+        // lines wrap.
+        final words = '${result.stdout}'.replaceAll(RegExp(r'\s+'), ' ');
+        expect(
+          words,
+          allOf(
+            contains(
+              'the first of ANDROID_HOME, ANDROID_SDK_ROOT and '
+              '~/Library/Android/sdk',
+            ),
+            contains(
+              'the first of ANDROID_NDK_HOME, ANDROID_NDK_ROOT and the '
+              'newest NDK of the SDK',
+            ),
           ),
         );
       });
 
       for (final (args, message) in [
         (['--android'], '--android needs --bench'),
-        (['--android=ce06193672a0ae0e057e'], '--android needs --bench'),
+        (['--android=emulator-5554'], '--android needs --bench'),
         (['--bench', '--android='], 'Unknown option --android='),
         (['--bench', '--androids'], 'Unknown option --androids'),
       ]) {

@@ -4,12 +4,15 @@
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
 
-// Tests the sum of a step of the sfizz fork (stepSum() in
-// src/sfizz/SIMDHelpers.cpp, ticket 30), which the positions of a voice and
-// the time of its flex EG take: it gives what a loop of float additions
-// gives, bit for bit - across binades, with a step that rounds to nothing,
-// with steps halfway between two multiples of an ulp, from 0, for the
-// sample period of 48 kHz and for the steps of a voice's pitch.
+// Tests the helpers ticket 30 added to the SIMD helpers of the sfizz fork
+// (src/sfizz/SIMDHelpers.h and SIMDHelpers.cpp). The sum of a step,
+// stepSum(), which the positions of a voice and the time of its flex EG
+// take, gives what a loop of float additions gives, bit for bit - across
+// binades, with a step that rounds to nothing, with steps halfway between
+// two multiples of an ulp, from 0, for the sample period of 48 kHz and for
+// the steps of a voice's pitch. The split of a position, splitPosition(),
+// which the loops of a voice and sfzInterpolationCast() take, gives what
+// the cast of sfizz gave before.
 
 #include <cmath>
 #include <cstdint>
@@ -48,6 +51,19 @@ float fromBits(uint32_t bits) {
   return value;
 }
 
+// What splitPosition() must give: the cast of sfizz before ticket 30
+// (_internals::snippetSFZInterpolationCast()), the start added after it.
+bool splitsAlike(float position, int start) {
+  constexpr float maxJump{1 << 24};
+  const float limitedJump = ::min(maxJump, position);
+  const int expectedIndex = static_cast<int>(limitedJump) + start;
+  const float expectedCoeff = limitedJump - static_cast<float>(static_cast<int>(limitedJump));
+  int index = -1;
+  float coeff = -1.0f;
+  sfz::splitPosition(position, start, index, coeff);
+  return index == expectedIndex && std::memcmp(&coeff, &expectedCoeff, sizeof(coeff)) == 0;
+}
+
 }  // namespace
 
 AUD_TEST(sfizz_step_sum_sums_as_a_loop_bit_for_bit) {
@@ -84,4 +100,21 @@ AUD_TEST(sfizz_step_sum_sums_as_a_loop_bit_for_bit) {
   AUD_CHECK(sumsAlike(-5.0f, 0.25f, 100));
   AUD_CHECK(sumsAlike(0.0f, std::numeric_limits<float>::denorm_min(), 100));
   AUD_CHECK(sumsAlike(std::numeric_limits<float>::max() / 2, std::numeric_limits<float>::max() / 8, 20));
+}
+
+AUD_TEST(sfizz_split_position_splits_as_the_cast_before) {
+  // Positions within a frame, on a frame, below 1, of many frames, where a
+  // float holds few fractional bits, and beyond 2^24, which counts as 2^24.
+  for (float position : {0.0f, 0.37f, 0.9999999f, 1.0f, 1.0594631f, 47.5f, 47999.99f, 1048575.9f, 8388607.5f,
+                         16777215.0f, 16777216.0f, 16777218.0f, 1e9f}) {
+    for (int start : {0, 1, 48000, -3}) AUD_CHECK(splitsAlike(position, start));
+  }
+  // Positions of every size from the bits of a pseudo-random sequence.
+  uint32_t state = 54321;
+  for (int round = 0; round < 10000; ++round) {
+    state = state * 1664525u + 1013904223u;
+    // Exponents from 2^-20 to 2^27.
+    const float position = fromBits(((107u + (state >> 26) % 48u) << 23) | (state & 0x7fffffu));
+    AUD_CHECK(splitsAlike(position, static_cast<int>(state >> 24)));
+  }
 }

@@ -1,3 +1,7 @@
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): the
+// modulations are read through const pointers: a target may hand out the
+// buffer of its single source (ModMatrix::getModulation()).
+
 #include "EQPool.h"
 #include "Region.h"
 #include "Resources.h"
@@ -61,16 +65,16 @@ void sfz::EQHolder::process(const float** inputs, float** outputs, unsigned numF
         return;
 
     fill<float>(*frequencySpan, baseFrequency);
-    if (float* mod = mm.getModulation(frequencyTarget))
-        add<float>(absl::Span<float>(mod, numFrames), *frequencySpan);
+    if (const float* mod = mm.getModulation(frequencyTarget))
+        add<float>(absl::Span<const float>(mod, numFrames), *frequencySpan);
 
     fill<float>(*bandwidthSpan, baseBandwidth);
-    if (float* mod = mm.getModulation(bandwidthTarget))
-        add<float>(absl::Span<float>(mod, numFrames), *bandwidthSpan);
+    if (const float* mod = mm.getModulation(bandwidthTarget))
+        add<float>(absl::Span<const float>(mod, numFrames), *bandwidthSpan);
 
     fill<float>(*gainSpan, baseGain);
-    if (float* mod = mm.getModulation(gainTarget))
-        add<float>(absl::Span<float>(mod, numFrames), *gainSpan);
+    if (const float* mod = mm.getModulation(gainTarget))
+        add<float>(absl::Span<const float>(mod, numFrames), *gainSpan);
 
     if (!prepared) {
         eq->prepare(frequencySpan->front(), bandwidthSpan->front(), gainSpan->front());

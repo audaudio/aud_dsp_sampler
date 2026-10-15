@@ -6,7 +6,8 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm):
 // stepSum() sums a step frame by frame as a loop does, mostly in runs a
-// vector computes.
+// vector computes. splitPosition() splits a position into an index and a
+// coefficient for sfzInterpolationCast() and for the loops of a voice.
 
 /**
  * @file SIMDHelpers.h
@@ -655,16 +656,34 @@ void cumsum(absl::Span<const T> input, absl::Span<T> output) noexcept
  */
 void stepSum(float start, float step, float* output, unsigned size) noexcept;
 
+/**
+ * @brief Splits a position into the index of the frame at or before it and
+ * the coefficient of the interpolation from there, as
+ * sfzInterpolationCast() splits it, for the loops of a voice that sum and
+ * split in one pass (aud_dsp_sampler, ticket 30). A position beyond 2^24
+ * counts as 2^24: a float holds no fraction there, an int holds it whole.
+ *
+ * @param position the position from `start` on
+ * @param start the index the position counts from
+ * @param index the index of the frame, `start` included
+ * @param coeff the coefficient
+ */
+inline void splitPosition(float position, int start, int& index, float& coeff) noexcept
+{
+    constexpr float maxJump { 1 << 24 };
+    const float limitedJump = min(maxJump, position);
+    const int integral = static_cast<int>(limitedJump);
+    index = integral + start;
+    coeff = limitedJump - static_cast<float>(integral);
+}
+
 // FIXME: This should go away once the changes from the resampler are in
 
 namespace _internals {
     template <class T>
     void snippetSFZInterpolationCast(const T*& floatJump, int*& jump, T*& coeff)
     {
-        constexpr float maxJump { 1 << 24 };
-        const float limitedJump = min(maxJump, *floatJump);
-        *jump = static_cast<int>(limitedJump);
-        *coeff = limitedJump - static_cast<float>(*jump);
+        splitPosition(*floatJump, 0, *jump, *coeff);
         incrementAll(floatJump, coeff, jump);
     }
 }

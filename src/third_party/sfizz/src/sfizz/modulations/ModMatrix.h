@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): the
+// modulation of a target is read-only, since it may be the buffer of the
+// target's single source.
+
 #pragma once
 #include "../utility/NumericId.h"
 #include <string>
@@ -157,11 +161,13 @@ public:
 
     /**
      * @brief Get the modulation buffer for the given target.
-     * If the target does not exist, the result is null.
+     * If the target does not exist, the result is null. The buffer may be
+     * that of the target's single source, which callers must not write
+     * (aud_dsp_sampler, ticket 30).
      *
      * @param targetId identifier of the modulation target
      */
-    float* getModulation(TargetId targetId);
+    const float* getModulation(TargetId targetId);
 
     /**
      * @brief Get the modulation buffer for the given target.
@@ -169,7 +175,7 @@ public:
      *
      * @param targetKey key of the modulation target
      */
-    float* getModulationByKey(const ModKey& targetKey)
+    const float* getModulationByKey(const ModKey& targetKey)
         { return getModulation(findTarget(targetKey)); }
 
     /**

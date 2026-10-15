@@ -6,8 +6,9 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): a
 // target with a single source at depth 1 hands out the buffer of the source
-// instead of a copy of it; its callers only read it. A target that a cycle
-// of modulations reads while it computes keeps the copy.
+// instead of a copy of it; its callers only read it, through the const
+// pointer getModulation() returns. A target that a cycle of modulations
+// reads while it computes keeps the copy.
 
 #include "ModMatrix.h"
 #include "ModId.h"
@@ -57,7 +58,7 @@ struct ModMatrix::Impl {
         Buffer<float> buffer;
         // What getModulation() hands out once the target is ready: the
         // buffer, or that of its single source (aud_dsp_sampler, ticket 30).
-        float* data {};
+        const float* data {};
         // Whether the target computes, and whether a cycle read it then.
         bool computing {};
         bool cyclic {};
@@ -394,7 +395,7 @@ void ModMatrix::endVoice()
     impl.currentVoiceTriggerValue_ = 0.0f;
 }
 
-float* ModMatrix::getModulation(TargetId targetId)
+const float* ModMatrix::getModulation(TargetId targetId)
 {
     if (!validTarget(targetId))
         return nullptr;
@@ -528,7 +529,7 @@ float* ModMatrix::getModulation(TargetId targetId)
         if (target.cyclic)
             copy(absl::Span<const float>(single, numFrames), buffer);
         else
-            target.data = const_cast<float*>(single);
+            target.data = single;
     }
 
     return target.data;

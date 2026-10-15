@@ -237,6 +237,19 @@ const Config kConfigs[] = {
     { "hermite, flex EG, stereo", "hermite-flex-stereo", 2, true, 2 },
 };
 
+// The variant of kConfigs named `name`, wherever it stands in the list.
+// Ends the benchmark if there is none: no other variant may stand in for a
+// renamed one.
+const Config& configNamed(const std::string& name)
+{
+    for (const Config& config : kConfigs) {
+        if (name == config.name)
+            return config;
+    }
+    std::fprintf(stderr, "No variant of the instrument is named %s\n", name.c_str());
+    std::exit(1);
+}
+
 // The voices a block is measured with; the straight line goes through
 // them.
 constexpr int kMostVoices = 32;
@@ -483,8 +496,8 @@ int main(int argc, char** argv)
     }
 
     // The voice start, on the app's interpolation with both envelopes.
-    const Config& hermiteFlex = kConfigs[3];
-    const Config& hermiteAdsr = kConfigs[2];
+    const Config& hermiteFlex = configNamed("hermite, flex EG, mono");
+    const Config& hermiteAdsr = configNamed("hermite, ADSR, mono");
     measureBurst(folder, hermiteFlex, 0);
     measureBurst(folder, hermiteFlex, kMostVoices - kBurst);
     measureBurst(folder, hermiteAdsr, 0);

@@ -25,7 +25,8 @@
 // of every voice of the list: a free voice renders nothing and ignores
 // every event. The callback breakdown times the blocks and the events only
 // once it was asked for: its clock reads cost a note-on a quarter of its
-// time; the stages of a voice are no longer timed.
+// time; the stages of a voice are no longer timed, and the breakdown no
+// longer adds their durations, which stay 0.
 
 #include "SynthPrivate.h"
 #include "VirtualFile.h"
@@ -1286,10 +1287,6 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
                     bus->addToInputs(*tempSpan, addGain, numFrames);
                 }
             }
-            callbackBreakdown.data += voice.getLastDataDuration();
-            callbackBreakdown.amplitude += voice.getLastAmplitudeDuration();
-            callbackBreakdown.filters += voice.getLastFilterDuration();
-            callbackBreakdown.panning += voice.getLastPanningDuration();
 
             mm.endVoice();
 

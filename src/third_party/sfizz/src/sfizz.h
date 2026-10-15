@@ -4,6 +4,11 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm):
+// sfizz_get_callback_breakdown() starts the timing of the blocks and the
+// events, so that its first call returns zeros; the stages of a voice are
+// not timed.
+
 /**
  * @file
  * @brief sfizz public C API.
@@ -1043,6 +1048,11 @@ typedef struct
 
 /**
  * @brief Get the last callback breakdown. Call after a render method.
+ *
+ * The timing starts only after the first call, so that call returns zeros:
+ * the clock reads cost a note-on a quarter of its time (aud_dsp_sampler,
+ * ticket 30). The stages of a voice are not timed: data, amplitude, filters
+ * and panning stay 0.
  *
  * @since 1.2.0
  *

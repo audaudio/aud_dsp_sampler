@@ -76,6 +76,15 @@
 
 - The goals and the documentation name sampler-009 and the plan of ticket 30
 
+- Add the fixes of the review of ticket 30
+
+- getModulation() hands out const buffers; native tests prove the single-source shortcut, the copy before a further source and the cycle against the computation of before
+- Named gains of the pan compensation, one loop of the amplitude gains, splitPosition() shared with the interpolation cast
+- The callback breakdown no longer adds the stage times that stay 0, and its docs say when it times
+- The stepSum() test lives in sfizz_simd_helpers_test.cpp; the bench picks its configs by name
+- test-native.js finds the Android SDK and NDK through ANDROID_HOME, ANDROID_SDK_ROOT, ANDROID_NDK_HOME and ANDROID_NDK_ROOT; the script test uses no real device serial
+- The German README names the interpolation and the envelope
+
 ## 0.3.2 - 2026-10-14
 
 ### Added

@@ -25,9 +25,9 @@ Teil der Audanika Audio Engine; geplant in [aud_audio_pm](https://github.com/aud
   Ausblendung von 10 ms (sampler-008)
 - Eine Stimme kostet ein Drittel dessen, was sie vor Ticket 30 kostete: die
   Stimmenschleife besucht nur die belegten Stimmen, fasst ihre Gain- und
-  Pan-Durchläufe zusammen, interpoliert und hüllt auf arm64 vier Frames auf
-  einmal und rendert ganze Hüllkurvenabschnitte, bei Bit für Bit gleichen
-  Renderings (sampler-009)
+  Pan-Durchläufe zusammen, berechnet auf arm64 Interpolation und Hüllkurve
+  für vier Frames auf einmal und rendert ganze Hüllkurvenabschnitte, bei
+  Bit für Bit gleichen Renderings (sampler-009)
 - Auf dem Audio-Thread wird nichts alloziert (interop-001); die nativen
   Tests lassen den Knoten unter dem Watchdog der Engine, dem
   RealtimeSanitizer und dem ThreadSanitizer laufen

@@ -81,10 +81,17 @@ const usage = `Usage: node scripts/test-native.js [options]
                                        on macOS, beside LLVM's dsymutil
   AUD_BENCH_BASE=<git ref>             the fork --bench compares with,
                                        default ${benchBaseDefault}
-  ANDROID_NDK_HOME=<ndk>               the NDK of --android, default the
-                                       newest in ~/Library/Android/sdk/ndk
+  ANDROID_HOME=<sdk>
+  ANDROID_SDK_ROOT=<sdk>               the Android SDK of --android, the
+                                       first of ANDROID_HOME,
+                                       ANDROID_SDK_ROOT and
+                                       ~/Library/Android/sdk
+  ANDROID_NDK_HOME=<ndk>
+  ANDROID_NDK_ROOT=<ndk>               the NDK of --android, the first of
+                                       ANDROID_NDK_HOME, ANDROID_NDK_ROOT
+                                       and the newest NDK of the SDK
   ADB=<adb>                            the adb of --android, default
-                                       ~/Library/Android/sdk/platform-tools/adb
+                                       platform-tools/adb in the SDK
   UPDATE_GOLDENS=1                     --bench writes the golden of the
                                        app's instrument with that fork
 `;
@@ -716,15 +723,30 @@ async function bench() {
 // ............................................................................
 // The benchmark on an Android device (ticket 30)
 
-// The NDK of --android: ANDROID_NDK_HOME, else the newest one of the SDK.
+// The Android SDK of --android: ANDROID_HOME, else ANDROID_SDK_ROOT, the
+// variables of the SDK's tools, else where Android Studio installs it on
+// macOS.
+function androidSdk() {
+  return (
+    process.env.ANDROID_HOME ||
+    process.env.ANDROID_SDK_ROOT ||
+    path.join(os.homedir(), 'Library', 'Android', 'sdk')
+  );
+}
+
+// The NDK of --android: ANDROID_NDK_HOME, else ANDROID_NDK_ROOT, which
+// older tools set, else the newest one of the SDK.
 function androidNdk() {
-  if (process.env.ANDROID_NDK_HOME) return process.env.ANDROID_NDK_HOME;
-  const ndks = path.join(os.homedir(), 'Library', 'Android', 'sdk', 'ndk');
+  const ndk = process.env.ANDROID_NDK_HOME || process.env.ANDROID_NDK_ROOT;
+  if (ndk) return ndk;
+  const ndks = path.join(androidSdk(), 'ndk');
   const versions = fs.existsSync(ndks)
     ? fs.readdirSync(ndks).filter((name) => /^\d+(\.\d+)*$/.test(name))
     : [];
   if (versions.length === 0) {
-    throw new Error(`No NDK: set ANDROID_NDK_HOME or install one into ${ndks}`);
+    throw new Error(
+      `No NDK: set ANDROID_NDK_HOME or ANDROID_NDK_ROOT or install one into ${ndks}`,
+    );
   }
   const parts = (version) => version.split('.').map(Number);
   versions.sort((a, b) => {
@@ -845,9 +867,8 @@ function runAndroidBench(device, name, remote, cluster, folder) {
 // cluster of the device's cores in turn, never two at once, and prints a
 // table per cluster; compares the renders of each.
 async function benchAndroid(serial) {
-  const sdk = path.join(os.homedir(), 'Library', 'Android', 'sdk');
   const device = {
-    adb: process.env.ADB || path.join(sdk, 'platform-tools', 'adb'),
+    adb: process.env.ADB || path.join(androidSdk(), 'platform-tools', 'adb'),
     serial,
   };
   const abis = adb(device, ['shell', 'getprop ro.product.cpu.abilist']).stdout;
