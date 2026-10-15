@@ -25,9 +25,20 @@
 - Add fused amplitude and pan passes of a voice
 
 - The gains of the amplitude stage take one pass; gain, pan, width, position and compensation take one more when they hold over the block (panMono(), panStereo())
+
 - A region without crossfade controllers skips the crossfade; the power follower runs only for the stealer that reads it
+
 - A modulation target with one source at depth 1 hands out the source buffer instead of a copy, a cycle keeps the copy
+
 - The stages of a voice are no longer timed for the callback breakdown
+
+- The renders stay the same bit for bit
+
+- Add interpolation of four frames at once and skip the walks of a block
+
+- A pitch that holds over the block converts once; the positions are summed and split into indices and coefficients in one pass where cumsum() has no SIMD code
+- A block that ends before its loop, its loop crossfade or its sample skips the walks that wrap and end
+- On arm64 the Hermite interpolation computes four frames in a vector with the products and sums of a frame
 - The renders stay the same bit for bit
 
 ## 0.3.2 - 2026-10-14

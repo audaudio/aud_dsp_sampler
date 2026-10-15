@@ -28,7 +28,11 @@
 // position take one more when they hold their values (panMono(),
 // panStereo()); a region without crossfade controllers skips the crossfade;
 // the power follower runs only for the stealer that reads it. The stages
-// of a voice are no longer timed for the callback breakdown.
+// of a voice are no longer timed for the callback breakdown. A pitch that
+// holds its value converts once; the positions are summed and split in one
+// pass where cumsum() has no SIMD code; a block that reaches no end of its
+// loop or sample skips the walks that look for one; on arm64 the Hermite
+// interpolation takes four frames at once (fillHermite()).
 
 #include "Voice.h"
 #include "Layer.h"
@@ -64,6 +68,13 @@
 #include <absl/types/span.h>
 #include <random>
 
+#if SFIZZ_HAVE_NEON && SFIZZ_CPU_FAMILY_AARCH64
+#include <arm_neon.h>
+#define SFIZZ_AUD_HERMITE_NEON 1
+#else
+#define SFIZZ_AUD_HERMITE_NEON 0
+#endif
+
 namespace sfz {
 
 namespace {
@@ -78,6 +89,91 @@ bool holds(const float* values, size_t size) noexcept
         held &= values[i] == first;
     return held;
 }
+
+#if SFIZZ_AUD_HERMITE_NEON
+// The Hermite interpolation of four frames at once (aud_dsp_sampler, ticket
+// 30): a vector holds a tap of four frames instead of the four taps of a
+// frame, with the products and sums of Interpolator<kInterpolatorHermite3>,
+// whose vaddvq_f32 adds (tap -1 + tap 0) + (tap 1 + tap 2). A coefficient
+// lies in [0, 1), so that the taps 0 and 1 lie within 1 of the position and
+// take the inner polynomial of hermite3x4(), the taps -1 and 2 lie within
+// 1 to 2 and take the outer one; both are 0 at 1, where they meet.
+
+inline float32x4_t hermiteInner(float32x4_t x)
+{
+    const float32x4_t x2 = vmulq_f32(x, x);
+    const float32x4_t x3 = vmulq_f32(x2, x);
+    const float32x4_t q = vmulq_f32(vdupq_n_f32(5.0f / 2.0f), x2);
+    return vaddq_f32(vsubq_f32(vdupq_n_f32(1.0f), q), vmulq_f32(vdupq_n_f32(3.0f / 2.0f), x3));
+}
+
+inline float32x4_t hermiteOuter(float32x4_t x)
+{
+    const float32x4_t x2 = vmulq_f32(x, x);
+    const float32x4_t x3 = vmulq_f32(x2, x);
+    const float32x4_t q = vmulq_f32(vdupq_n_f32(5.0f / 2.0f), x2);
+    const float32x4_t p = vsubq_f32(vdupq_n_f32(2.0f), vmulq_f32(vdupq_n_f32(4.0f), x));
+    return vsubq_f32(vaddq_f32(p, q), vmulq_f32(vdupq_n_f32(1.0f / 2.0f), x3));
+}
+
+// The weights of the taps -1 to 2 of four frames.
+struct HermiteWeights {
+    float32x4_t w[4];
+};
+
+inline HermiteWeights hermiteWeights(float32x4_t coeff)
+{
+    HermiteWeights h;
+    h.w[0] = hermiteOuter(vabsq_f32(vsubq_f32(vdupq_n_f32(-1.0f), coeff)));
+    h.w[1] = hermiteInner(vabsq_f32(vsubq_f32(vdupq_n_f32(0.0f), coeff)));
+    h.w[2] = hermiteInner(vabsq_f32(vsubq_f32(vdupq_n_f32(1.0f), coeff)));
+    h.w[3] = hermiteOuter(vabsq_f32(vsubq_f32(vdupq_n_f32(2.0f), coeff)));
+    return h;
+}
+
+// The frames of a source at four indices, interpolated.
+inline float32x4_t hermiteFrames(const float* source, const int* index, const HermiteWeights& h)
+{
+    // The taps around each index, transposed into a vector per tap.
+    const float32x4_t r0 = vld1q_f32(source + index[0] - 1);
+    const float32x4_t r1 = vld1q_f32(source + index[1] - 1);
+    const float32x4_t r2 = vld1q_f32(source + index[2] - 1);
+    const float32x4_t r3 = vld1q_f32(source + index[3] - 1);
+    const float32x4_t t0 = vtrn1q_f32(r0, r1);
+    const float32x4_t t1 = vtrn2q_f32(r0, r1);
+    const float32x4_t t2 = vtrn1q_f32(r2, r3);
+    const float32x4_t t3 = vtrn2q_f32(r2, r3);
+    const float32x4_t v0 = vreinterpretq_f32_f64(vtrn1q_f64(vreinterpretq_f64_f32(t0), vreinterpretq_f64_f32(t2)));
+    const float32x4_t v1 = vreinterpretq_f32_f64(vtrn1q_f64(vreinterpretq_f64_f32(t1), vreinterpretq_f64_f32(t3)));
+    const float32x4_t v2 = vreinterpretq_f32_f64(vtrn2q_f64(vreinterpretq_f64_f32(t0), vreinterpretq_f64_f32(t2)));
+    const float32x4_t v3 = vreinterpretq_f32_f64(vtrn2q_f64(vreinterpretq_f64_f32(t1), vreinterpretq_f64_f32(t3)));
+    const float32x4_t below = vaddq_f32(vmulq_f32(h.w[0], v0), vmulq_f32(h.w[1], v1));
+    const float32x4_t above = vaddq_f32(vmulq_f32(h.w[2], v2), vmulq_f32(h.w[3], v3));
+    return vaddq_f32(below, above);
+}
+
+// Fills `dest` from `source` at the positions of `indices` and `coeffs`,
+// four frames at once and the rest one by one, as
+// fillInterpolated<kInterpolatorHermite3, false>() fills it.
+void fillHermite(const AudioSpan<const float>& source, const AudioSpan<float>& dest,
+    absl::Span<const int> indices, absl::Span<const float> coeffs) noexcept
+{
+    const size_t size = indices.size();
+    const size_t channels = source.getNumChannels() == 1 ? 1 : 2;
+    const int* index = indices.data();
+    const float* coeff = coeffs.data();
+    size_t i = 0;
+    for (; i + 4 <= size; i += 4) {
+        const HermiteWeights h = hermiteWeights(vld1q_f32(coeff + i));
+        for (size_t c = 0; c < channels; ++c)
+            vst1q_f32(dest.getChannel(c) + i, hermiteFrames(source.getChannel(c), index + i, h));
+    }
+    for (; i < size; ++i) {
+        for (size_t c = 0; c < channels; ++c)
+            dest.getChannel(c)[i] = interpolate<kInterpolatorHermite3>(&source.getChannel(c)[index[i]], coeff[i]);
+    }
+}
+#endif
 
 } // namespace
 
@@ -1322,18 +1418,47 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         pitchEnvelope(pitch);
 
         float baseRatio = pitchRatio_ * speedRatio_;
-        auto ratioOfCents = cacheSameArgument([](float cents) { return centsFactor(cents); });
-        for (size_t i = 0; i < numSamples; ++i)
-            (*jumps)[i] = baseRatio * ratioOfCents(pitch[i]);
+        if (holds(pitch.data(), numSamples)) {
+            // A pitch that holds its value, as mostly: one conversion and
+            // steps of one length (aud_dsp_sampler, ticket 30).
+            fill<float>(*jumps, baseRatio * centsFactor(pitch[0]));
+        } else {
+            auto ratioOfCents = cacheSameArgument([](float cents) { return centsFactor(cents); });
+            for (size_t i = 0; i < numSamples; ++i)
+                (*jumps)[i] = baseRatio * ratioOfCents(pitch[i]);
+        }
 
         // Take the first sample if the voice just started
         if (age_ == 0)
             jumps->front() = 0.0f;
 
         jumps->front() += floatPositionOffset_;
+#if SFIZZ_CPU_FAMILY_X86_64 || SFIZZ_CPU_FAMILY_I386
         cumsum<float>(*jumps, *jumps);
         sfzInterpolationCast<float>(*jumps, *indices, *coeffs);
         add1<int>(sourcePosition_, *indices);
+#else
+        // The sum of the steps in order, as cumsum() sums them where it has
+        // no SIMD code, split into indices and coefficients as
+        // sfzInterpolationCast() splits them, in one pass: an in-order core
+        // splits a position while it waits for the next one
+        // (aud_dsp_sampler, ticket 30).
+        const float* jump = jumps->data();
+        int* index = indices->data();
+        float* coeff = coeffs->data();
+        const int start = sourcePosition_;
+        float position = jump[0];
+        for (size_t i = 0;;) {
+            constexpr float maxJump { 1 << 24 };
+            const float limitedJump = min(maxJump, position);
+            const int integral = static_cast<int>(limitedJump);
+            index[i] = integral + start;
+            coeff[i] = limitedJump - static_cast<float>(integral);
+            if (++i == numSamples)
+                break;
+            position = position + jump[i];
+        }
+#endif
     }
 
     // Update loop characteristics with the current CC state
@@ -1346,6 +1471,15 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
     const bool loopContinuous = (region_->loopMode == LoopMode::loop_continuous);
     const bool loopSustain = (region_->loopMode == LoopMode::loop_sustain) && !released();
     const bool shouldLoop = hasLoopSamples && (loopSustain || loopContinuous) && !loopCountReached;
+    const auto sampleEnd = min( int(sampleEnd_), int(currentPromise_->information.end), trueFrames) - 1;
+
+    // The indices never fall: a block whose last index lies before the loop
+    // crossfade and the end of the loop, or before the end of the sample,
+    // wraps, restarts and ends nothing and is one plain partition, which the
+    // walks below find frame by frame (aud_dsp_sampler, ticket 30).
+    const bool reachesNoEnd = shouldLoop
+        ? indices->back() < loop.xfOutStart && indices->back() <= loop.end
+        : indices->back() < sampleEnd;
 
     /*
                loop start             loop end
@@ -1367,7 +1501,7 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
     enum PartitionType { kPartitionNormal, kPartitionLoopXfade };
 
     SpanHolder<absl::Span<int>> partitionBuffers[2];
-    if (shouldLoop) {
+    if (shouldLoop && !reachesNoEnd) {
         for (auto& buf : partitionBuffers) {
             buf = bufferPool.getIndexBuffer(numSamples);
             if (!buf)
@@ -1384,8 +1518,6 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         partitionTypes = absl::MakeSpan(const_cast<int*>(types), 1);
         numPartitions = 1;
     }
-
-    const auto sampleEnd = min( int(sampleEnd_), int(currentPromise_->information.end), trueFrames) - 1;
 
     int blockRestarts { 0 };
     int oldIndex {};
@@ -1407,7 +1539,9 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
         oldPartitionType = partitionType;
     };
 
-    if (shouldLoop) {
+    if (reachesNoEnd) {
+        // Nothing to wrap or end.
+    } else if (shouldLoop) {
         unsigned i = 0;
         while (i < numSamples) {
             int wrappedIndex = (*indices)[i] - loop.size * blockRestarts;
@@ -1609,6 +1743,13 @@ void Voice::Impl::fillInterpolated(
     absl::Span<const int> indices, absl::Span<const float> coeffs,
     absl::Span<const float> addingGains)
 {
+#if SFIZZ_AUD_HERMITE_NEON
+    IF_CONSTEXPR (M == kInterpolatorHermite3 && !Adding) {
+        fillHermite(source, dest, indices, coeffs);
+        return;
+    }
+#endif
+
     auto* ind = indices.data();
     auto* coeff = coeffs.data();
     auto* addingGain = addingGains.data();
