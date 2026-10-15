@@ -8,6 +8,9 @@
 // countVoices() and stealVoices() serve a voice limit of the host from the
 // list of active voices; a stolen voice is no attack voice that lets a
 // release trigger start. The polyphony checks are as they were.
+// Ticket 30: a bit per voice that is not idle (busy_) lets the synth visit
+// only those and findFreeVoice() take the first idle voice without a walk;
+// it picks the voice the walk picked.
 
 #include "VoiceManager.h"
 #include "SisterVoiceRing.h"
@@ -20,6 +23,7 @@ void VoiceManager::onVoiceStateChanging(NumericId<Voice> id, Voice::State state)
 {
     if (state == Voice::State::idle) {
         Voice* voice = getVoiceById(id);
+        setBusy(voice, false);
         const Region* region = voice->getRegion();
         const uint32_t group = region->group;
         RegionSet::removeVoiceFromHierarchy(region, voice);
@@ -28,13 +32,29 @@ void VoiceManager::onVoiceStateChanging(NumericId<Voice> id, Voice::State state)
         polyphonyGroups_[group].removeVoice(voice);
     } else if (state == Voice::State::playing) {
         Voice* voice = getVoiceById(id);
+        setBusy(voice, true);
         const Region* region = voice->getRegion();
         const uint32_t group = region->group;
         activeVoices_.push_back(voice);
         RegionSet::registerVoiceInHierarchy(region, voice);
         ASSERT(polyphonyGroups_.contains(group));
         polyphonyGroups_[group].registerVoice(voice);
+    } else {
+        // To be cleaned up: from playing, or from idle for a disabled region.
+        setBusy(getVoiceById(id), true);
     }
+}
+
+void VoiceManager::setBusy(const Voice* voice, bool busy) noexcept
+{
+    ASSERT(voice != nullptr);
+    const size_t index = static_cast<size_t>(voice - list_.data());
+    ASSERT(index < list_.size());
+    const uint64_t bit = uint64_t { 1 } << (index % 64);
+    if (busy)
+        busy_[index / 64] |= bit;
+    else
+        busy_[index / 64] &= ~bit;
 }
 
 const Voice* VoiceManager::getVoiceById(NumericId<Voice> id) const noexcept
@@ -83,10 +103,7 @@ bool VoiceManager::playingAttackVoice(const Region* releaseRegion) noexcept
         );
     };
 
-    if (absl::c_find_if(list_, compatibleVoice) == list_.end())
-        return false;
-    else
-        return true;
+    return forEachBusyVoice(compatibleVoice);
 }
 
 void VoiceManager::ensureNumPolyphonyGroups(int groupIdx) noexcept
@@ -124,6 +141,7 @@ void VoiceManager::clear()
         pg.second.removeAllVoices();
     list_.clear();
     activeVoices_.clear();
+    busy_.clear();
 }
 
 void VoiceManager::setStealingAlgorithm(StealingAlgorithm algorithm)
@@ -220,6 +238,18 @@ void VoiceManager::checkPolyphony(const Region* region, int delay, const Trigger
 
 Voice* VoiceManager::findFreeVoice() noexcept
 {
+    // The first idle voice of the list, which the walk below would pick
+    // first, without the walk (aud_dsp_sampler, ticket 30).
+    for (size_t word = 0, words = busy_.size(); word < words; ++word) {
+        const uint64_t idle = ~busy_[word];
+        if (idle == 0)
+            continue;
+        const size_t index = word * 64 + lowestBit(idle);
+        if (index < list_.size())
+            return &list_[index];
+    }
+
+    // Every voice is busy: the oldest one turned off.
     Voice* freeVoice = nullptr;
     for (auto& v: list_) {
         if (v.isFree()) {
@@ -250,6 +280,7 @@ void VoiceManager::requireNumVoices(int numVoices, Resources& resources)
     list_.reserve(numEffectiveVoices);
     temp_.reserve(numEffectiveVoices);
     activeVoices_.reserve(numEffectiveVoices);
+    busy_.assign((numEffectiveVoices + 63) / 64, 0);
 
     for (int i = 0; i < numEffectiveVoices; ++i) {
         list_.emplace_back(i, resources);

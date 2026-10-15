@@ -7,9 +7,18 @@
 - Add a native bench of the voice loop by interpolation, envelope and voice start
 
 - The cost per voice and the fixed part of a block with 1, 8 and 32 held notes, by interpolation quality, flex EG or ADSR, mono or stereo, with and without pitch bend
+
 - The extra of a block that starts a burst of 10 note-ons
+
 - Renders of every variant compared within 1e-5 of full scale (sampler-007) against release 0.3.2
+
 - --bench --android builds both forks with the NDK and runs them on each CPU cluster of a device
+
+- Add a walk over the busy voices only, per block and per event
+
+- The voice manager keeps a bit per voice that is not idle; the render loop and the loops of note-offs, controllers, pitch bend, aftertouch, off groups, all notes off and all sound off visit only those, in the order of the list
+- findFreeVoice() takes the first idle voice without a walk
+- The renders stay the same bit for bit
 
 ## 0.3.2 - 2026-10-14
 

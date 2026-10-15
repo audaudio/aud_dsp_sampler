@@ -20,6 +20,10 @@
 // cannot be read or the parser reports an error.
 // Ticket 29: countVoices() and stealVoices() serve a voice limit of the
 // host through the voice manager.
+// Ticket 30: the block and the events visit only the voices that are not
+// idle (VoiceManager::forEachBusyVoice()), in the order of the list, instead
+// of every voice of the list: a free voice renders nothing and ignores
+// every event.
 
 #include "SynthPrivate.h"
 #include "VirtualFile.h"
@@ -1266,10 +1270,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     { // Main render block
         ScopedTiming logger { callbackBreakdown.renderMethod, ScopedTiming::Operation::addToDuration };
 
-        for (auto& voice : impl.voiceManager_) {
-            if (voice.isFree())
-                continue;
-
+        impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
             mm.beginVoice(voice.getId(), voice.getRegion()->getId(), voice.getTriggerEvent().value);
 
             const Region* region = voice.getRegion();
@@ -1292,7 +1293,8 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
 
             if (voice.toBeCleanedUp())
                 voice.reset();
-        }
+            return false;
+        });
     }
 
     { // Apply effect buses
@@ -1387,8 +1389,10 @@ void Synth::hdNoteOff(int delay, int noteNumber, float normalizedVelocity) noexc
 
     const auto replacedVelocity = midiState.getNoteVelocity(noteNumber);
 
-    for (auto& voice : impl.voiceManager_)
+    impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerNoteOff(delay, noteNumber, replacedVelocity);
+        return false;
+    });
 
     impl.noteOffDispatch(delay, noteNumber, replacedVelocity);
 }
@@ -1409,13 +1413,16 @@ void Synth::Impl::startVoice(Layer* layer, int delay, const TriggerEvent& trigge
 
 void Synth::Impl::checkOffGroups(const Region* region, int delay, int number, bool chokedByCC)
 {
-    for (auto& voice : voiceManager_) {
+    // The release triggers started here are visited too when they land
+    // behind this voice, as in the walk over all voices.
+    voiceManager_.forEachBusyVoice([&](Voice& voice) {
         if (voice.checkOffGroup(region, delay, number)) {
             const TriggerEvent& event = voice.getTriggerEvent();
             if (event.type == TriggerEventType::NoteOn && !chokedByCC)
                 noteOffDispatch(delay, event.number, event.value);
         }
-    }
+        return false;
+    });
 }
 
 void Synth::Impl::noteOffDispatch(int delay, int noteNumber, float velocity) noexcept
@@ -1585,15 +1592,19 @@ void Synth::Impl::performHdcc(int delay, int ccNumber, float normValue, bool asM
         }
 
         if (ccNumber == config::allNotesOffCC || ccNumber == config::allSoundOffCC) {
-            for (auto& voice : voiceManager_)
+            voiceManager_.forEachBusyVoice([](Voice& voice) {
                 voice.reset();
+                return false;
+            });
             midiState.allNotesOff(delay);
             return;
         }
     }
 
-    for (auto& voice : voiceManager_)
+    voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerCC(delay, ccNumber, normValue);
+        return false;
+    });
 
     ccDispatch(delay, ccNumber, normValue, extendedArg);
     midiState.ccEvent(delay, ccNumber, normValue);
@@ -1639,9 +1650,10 @@ void Synth::hdPitchWheel(int delay, float normalizedPitch) noexcept
         layer->registerPitchWheel(normalizedPitch);
     }
 
-    for (auto& voice : impl.voiceManager_) {
+    impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerPitchWheel(delay, normalizedPitch);
-    }
+        return false;
+    });
 
     impl.performHdcc(delay, ExtendedCCs::pitchBend, normalizedPitch, false);
 }
@@ -1672,9 +1684,10 @@ void Synth::hdChannelAftertouch(int delay, float normAftertouch) noexcept
         layerPtr->registerAftertouch(normAftertouch);
     }
 
-    for (auto& voice : impl.voiceManager_) {
+    impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerAftertouch(delay, normAftertouch);
-    }
+        return false;
+    });
 
     impl.performHdcc(delay, ExtendedCCs::channelAftertouch, normAftertouch, false);
 }
@@ -1692,8 +1705,10 @@ void Synth::hdPolyAftertouch(int delay, int noteNumber, float normAftertouch) no
 
     impl.resources_.getMidiState().polyAftertouchEvent(delay, noteNumber, normAftertouch);
 
-    for (auto& voice : impl.voiceManager_)
+    impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerPolyAftertouch(delay, noteNumber, normAftertouch);
+        return false;
+    });
 
     impl.performHdcc(delay, ExtendedCCs::polyphonicAftertouch, normAftertouch, false, noteNumber);
 }
@@ -2249,11 +2264,12 @@ void Synth::Impl::resetAllControllers(int delay) noexcept
     for (int cc = 0; cc < config::numCCs; ++cc)
         midiState.ccEvent(delay, cc, defaultCCValues_[cc]);
 
-    for (auto& voice : voiceManager_) {
+    voiceManager_.forEachBusyVoice([&](Voice& voice) {
         voice.registerPitchWheel(delay, 0);
         for (int cc = 0; cc < config::numCCs; ++cc)
             voice.registerCC(delay, cc, defaultCCValues_[cc]);
-    }
+        return false;
+    });
 
     for (const LayerPtr& layerPtr : layers_) {
         Layer& layer = *layerPtr;
@@ -2307,8 +2323,10 @@ const Synth::CallbackBreakdown& Synth::getCallbackBreakdown() const noexcept
 void Synth::allSoundOff() noexcept
 {
     Impl& impl = *impl_;
-    for (auto& voice : impl.voiceManager_)
+    impl.voiceManager_.forEachBusyVoice([](Voice& voice) {
         voice.reset();
+        return false;
+    });
     for (int i = 0; i < impl.numOutputs_; ++i) {
         for (auto& effectBus : impl.getEffectBusesForOutput(i))
             if (effectBus)

@@ -8,8 +8,9 @@
 // through a synth of its own, without the node (ticket 29): the count of
 // the voices that sound, are released and render, the order in which a
 // voice limit of the host steals them, and the release triggers a stolen
-// voice does not start. The instruments play sfizz's generators, so no
-// file is read.
+// voice does not start; that the walk over the busy voices of ticket 30
+// picks and visits the voices the walk over all voices did. The instruments
+// play sfizz's generators, so no file is read.
 
 #include <algorithm>
 #include <string>
@@ -195,4 +196,46 @@ AUD_TEST(sfizz_voice_manager_starts_no_release_trigger_after_a_stolen_voice) {
     played.synth.noteOff(10, 60, 0);
     AUD_CHECK(played.synth.countVoices().rendered == (steal ? 1 : 2));
   }
+}
+
+// ############################################################################
+// The walk over the busy voices (ticket 30)
+
+AUD_TEST(sfizz_voice_manager_starts_a_note_on_the_first_free_voice) {
+  // A voice that ended frees its place in the list; the next note takes
+  // the first free voice, as the walk over the whole list did.
+  Played played("<region> sample=*sine ampeg_release=0.001\n");
+  for (int note : {60, 62, 64}) played.synth.noteOn(0, note, 100);
+  played.render();
+  played.synth.noteOff(0, 62, 0);
+  played.render(30);
+  AUD_CHECK(played.synth.getVoiceView(1)->isFree());
+  played.synth.noteOn(0, 66, 100);
+  const std::vector<int> notes = {60, 66, 64};
+  for (int i = 0; i < 3; ++i) {
+    AUD_CHECK(!played.synth.getVoiceView(i)->isFree());
+    AUD_CHECK(played.synth.getVoiceView(i)->getTriggerEvent().number == notes[i]);
+  }
+  AUD_CHECK(played.synth.getVoiceView(3)->isFree());
+}
+
+AUD_TEST(sfizz_voice_manager_visits_a_release_trigger_started_by_an_off_group) {
+  // Key 62 turns the voice of key 60 off, whose release trigger starts in
+  // the walk over the voices, behind the voice turned off; the walk visits
+  // it, and it stays. Then the two layers of key 62 start.
+  Played played(
+      "<region> sample=*sine key=60 group=1 off_by=2 ampeg_release=2\n"
+      "<region> sample=*saw key=60 trigger=release ampeg_release=2\n"
+      "<region> sample=*triangle key=62 group=2 ampeg_release=2\n"
+      "<region> sample=*square key=62 group=3 off_by=2 ampeg_release=2\n");
+  played.synth.noteOn(0, 60, 100);
+  played.render();
+  played.synth.noteOn(5, 62, 100);
+  AUD_CHECK(played.synth.countVoices() == count(3, 0, 4));
+  const sfz::Voice* turnedOff = played.synth.getVoiceView(0);
+  const sfz::Voice* release = played.synth.getVoiceView(1);
+  AUD_CHECK(turnedOff->offedOrFree() && !turnedOff->isFree());
+  AUD_CHECK(release->getTriggerEvent().type == sfz::TriggerEventType::NoteOff);
+  AUD_CHECK(release->getTriggerEvent().number == 60 && !release->offedOrFree());
+  for (int i : {2, 3}) AUD_CHECK(played.synth.getVoiceView(i)->getTriggerEvent().number == 62);
 }
