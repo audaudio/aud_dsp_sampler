@@ -10,8 +10,8 @@
 // the stages after its sustain point; that release cannot be cancelled.
 // Ticket 30: a stage renders as a whole instead of frame by frame: a
 // sustain past the time of its stage fills its level, the frames of other
-// stages sum their times first (stepSum()) and then take their levels, with
-// the same results.
+// stages sum their times first (stepSum()) and then take their levels, on
+// arm64 four frames at once (stageLevels()), with the same results.
 
 /*
    Note(jpc): implementation status
@@ -40,7 +40,65 @@
 #include <absl/types/optional.h>
 #include <algorithm>
 
+#if SFIZZ_HAVE_NEON && SFIZZ_CPU_FAMILY_AARCH64
+#include <arm_neon.h>
+#define SFIZZ_AUD_LEVELS_NEON 1
+#else
+#define SFIZZ_AUD_LEVELS_NEON 0
+#endif
+
 namespace sfz {
+
+namespace {
+
+// The levels of a stage at the times of `frames` frames, in place: what
+// Curve::evalNormalized() and the sum with the source level give for each
+// time, four frames at once on arm64 (aud_dsp_sampler, ticket 30). The
+// curve interpolates between two of its points; in a stage longer than a
+// few blocks four frames mostly share them, and take them from one load.
+// The fused multiply-adds are those the compiler makes of the scalar code.
+void stageLevels(const Curve& curve, float inverseTime, float sourceLevel, float targetLevel,
+    float* frames, size_t size) noexcept
+{
+    size_t i = 0;
+#if SFIZZ_AUD_LEVELS_NEON
+    const float* points = curve.points();
+    const float32x4_t inverse = vdupq_n_f32(inverseTime);
+    const float32x4_t source = vdupq_n_f32(sourceLevel);
+    const float32x4_t range = vdupq_n_f32(targetLevel - sourceLevel);
+    for (; i + 4 <= size; i += 4) {
+        const float32x4_t x = vmulq_f32(vld1q_f32(frames + i), inverse);
+        float32x4_t value7 = vmulq_f32(x, vdupq_n_f32(127.0f));
+        value7 = vmaxq_f32(vminq_f32(value7, vdupq_n_f32(127.0f)), vdupq_n_f32(0.0f));
+        const int32x4_t i1 = vcvtq_s32_f32(value7);
+        const float32x4_t mu = vsubq_f32(value7, vcvtq_f32_s32(i1));
+        const int32_t lowest = vminvq_s32(i1);
+        float32x4_t below;
+        float32x4_t above;
+        if (lowest == vmaxvq_s32(i1)) {
+            below = vdupq_n_f32(points[lowest]);
+            above = vdupq_n_f32(points[std::min(127, lowest + 1)]);
+        } else {
+            int32_t index[4];
+            vst1q_s32(index, i1);
+            const float lows[4] = { points[index[0]], points[index[1]], points[index[2]], points[index[3]] };
+            const float highs[4] = { points[std::min(127, index[0] + 1)], points[std::min(127, index[1] + 1)],
+                points[std::min(127, index[2] + 1)], points[std::min(127, index[3] + 1)] };
+            below = vld1q_f32(lows);
+            above = vld1q_f32(highs);
+        }
+        const float32x4_t c = vfmaq_f32(below, mu, vsubq_f32(above, below));
+        vst1q_f32(frames + i, vfmaq_f32(source, c, range));
+    }
+#endif
+    for (; i < size; ++i) {
+        float x = frames[i] * inverseTime;
+        float c = curve.evalNormalized(x);
+        frames[i] = sourceLevel + c * (targetLevel - sourceLevel);
+    }
+}
+
+} // namespace
 
 struct FlexEnvelope::Impl {
     const Resources* resources_ { nullptr };
@@ -295,7 +353,8 @@ void FlexEnvelope::Impl::process(absl::Span<float> out)
             const size_t room = maxFrameIndex - frameIndex;
             stepSum(time + samplePeriod, samplePeriod, frame, static_cast<unsigned>(room));
             size_t frames = room;
-            if (!sustained) {
+            // The times only grow: mostly the last one is before the end.
+            if (!sustained && frame[room - 1] >= stageEndTime) {
                 for (size_t i = 0; i < room; ++i) {
                     if (frame[i] >= stageEndTime) {
                         frames = i + 1;
@@ -304,11 +363,7 @@ void FlexEnvelope::Impl::process(absl::Span<float> out)
                 }
             }
             time = frame[frames - 1];
-            for (size_t i = 0; i < frames; ++i) {
-                float x = frame[i] * inverseTime;
-                float c = curve.evalNormalized(x);
-                frame[i] = sourceLevel + c * (targetLevel - sourceLevel);
-            }
+            stageLevels(curve, inverseTime, sourceLevel, targetLevel, frame, frames);
             level = frame[frames - 1];
             framesDone = frames;
             frameIndex += frames;

@@ -57,9 +57,18 @@
 - Add a voice start without walks, lookups and clock reads
 
 - A polyphony check over fewer candidates than its limit finds no voice to steal without walking them
+
 - A layer keeps the modulation targets of its region instead of nine lookups per start; a file identifier hashes its name once
+
 - The callback breakdown times blocks and events only once it was asked for
+
 - The renders and the voices stay the same bit for bit
+
+- Add the levels of a flex EG stage four frames at once
+
+- On arm64 the levels of a timed stage are computed for four frames at once, which mostly share the two points of the curve
+- A block that ends before its stage skips the search for the end; stepSum() takes sums below 16 steps in a plain loop
+- The renders stay the same bit for bit
 
 ## 0.3.2 - 2026-10-14
 

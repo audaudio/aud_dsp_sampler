@@ -371,6 +371,13 @@ void stepSum(float start, float step, float* output, unsigned size) noexcept
 
     output[0] = start;
     unsigned i = 1;
+
+    // Below 16 steps the binades hold too few sums for a run: a plain loop,
+    // as from the start of an envelope's stage or of a voice's positions.
+    const float plain = 16.0f * step;
+    for (; i < size && output[i - 1] < plain; ++i)
+        output[i] = output[i - 1] + step;
+
     while (i < size) {
         // A step as the loop takes it.
         const float value = output[i - 1] + step;
