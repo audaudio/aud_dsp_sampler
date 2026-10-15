@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 - 2026-10-15
 
 ### Added
 
@@ -79,10 +79,15 @@
 - Add the fixes of the review of ticket 30
 
 - getModulation() hands out const buffers; native tests prove the single-source shortcut, the copy before a further source and the cycle against the computation of before
+
 - Named gains of the pan compensation, one loop of the amplitude gains, splitPosition() shared with the interpolation cast
+
 - The callback breakdown no longer adds the stage times that stay 0, and its docs say when it times
+
 - The stepSum() test lives in sfizz_simd_helpers_test.cpp; the bench picks its configs by name
+
 - test-native.js finds the Android SDK and NDK through ANDROID_HOME, ANDROID_SDK_ROOT, ANDROID_NDK_HOME and ANDROID_NDK_ROOT; the script test uses no real device serial
+
 - The German README names the interpolation and the envelope
 
 ## 0.3.2 - 2026-10-14
@@ -130,7 +135,6 @@
 - The steps of max_voices from kNoVoiceLimit; a compile-time check that the voice counters take no lock
 
 - The parameters of stealVoices and fadeOutStolen documented; the equality test of AudSfzVoiceStats as a loop
-
 
 ## 0.3.1 - 2026-10-14
 
@@ -312,7 +316,6 @@
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
 
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
-
 
 ## 0.1.0 - 2026-10-08
 
