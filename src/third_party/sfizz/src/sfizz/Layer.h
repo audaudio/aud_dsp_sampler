@@ -4,9 +4,14 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): a
+// layer keeps the modulation targets of its region, which its voices look up
+// once instead of at every start.
+
 #pragma once
 #include "Region.h"
 #include "Config.h"
+#include "modulations/ModMatrix.h"
 #include "utility/NumericId.h"
 #include "utility/LeakDetector.h"
 #include <absl/strings/string_view.h>
@@ -149,6 +154,23 @@ public:
     std::bitset<config::numCCs> ccSwitched_;
 
     int sequenceCounter_ { 0 };
+
+    // The targets of the region in the modulation matrix of the synth, found
+    // at the first start of a voice on the layer (aud_dsp_sampler, ticket
+    // 30): the matrix is built after the layers and cleared with them.
+    struct ModulationTargets {
+        bool found { false };
+        ModMatrix::TargetId masterAmplitude;
+        ModMatrix::TargetId amplitude;
+        ModMatrix::TargetId volume;
+        ModMatrix::TargetId pan;
+        ModMatrix::TargetId position;
+        ModMatrix::TargetId width;
+        ModMatrix::TargetId pitch;
+        ModMatrix::TargetId oscillatorDetune;
+        ModMatrix::TargetId oscillatorModDepth;
+    };
+    ModulationTargets modulationTargets_;
 
     Region region_;
 

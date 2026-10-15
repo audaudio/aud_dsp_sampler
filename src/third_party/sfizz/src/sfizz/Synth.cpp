@@ -23,7 +23,9 @@
 // Ticket 30: the block and the events visit only the voices that are not
 // idle (VoiceManager::forEachBusyVoice()), in the order of the list, instead
 // of every voice of the list: a free voice renders nothing and ignores
-// every event.
+// every event. The callback breakdown times the blocks and the events only
+// once it was asked for: its clock reads cost a note-on a quarter of its
+// time; the stages of a voice are no longer timed.
 
 #include "SynthPrivate.h"
 #include "VirtualFile.h"
@@ -1223,7 +1225,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     impl.dispatchDuration_ = 0.0;
 
     { // Silence buffer
-        ScopedTiming logger { callbackBreakdown.renderMethod };
+        ScopedTiming logger { callbackBreakdown.renderMethod, ScopedTiming::Operation::replaceDuration, impl.timed() };
         buffer.fill(0.0f);
     }
 
@@ -1258,7 +1260,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     }
 
     { // Clear effect busses
-        ScopedTiming logger { callbackBreakdown.effects };
+        ScopedTiming logger { callbackBreakdown.effects, ScopedTiming::Operation::replaceDuration, impl.timed() };
         for (int i = 0; i < impl.numOutputs_; ++i) {
             for (auto& bus : impl.getEffectBusesForOutput(i)) {
                 if (bus)
@@ -1268,7 +1270,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     }
 
     { // Main render block
-        ScopedTiming logger { callbackBreakdown.renderMethod, ScopedTiming::Operation::addToDuration };
+        ScopedTiming logger { callbackBreakdown.renderMethod, ScopedTiming::Operation::addToDuration, impl.timed() };
 
         impl.voiceManager_.forEachBusyVoice([&](Voice& voice) {
             mm.beginVoice(voice.getId(), voice.getRegion()->getId(), voice.getTriggerEvent().value);
@@ -1300,7 +1302,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     { // Apply effect buses
         // -- note(jpc) there is always a "main" bus which is initially empty.
         //    without any <effect>, the signal is just going to flow through it.
-        ScopedTiming logger { callbackBreakdown.effects, ScopedTiming::Operation::addToDuration };
+        ScopedTiming logger { callbackBreakdown.effects, ScopedTiming::Operation::addToDuration, impl.timed() };
 
         const int numChannels = static_cast<int>(buffer.getNumChannels());
         for (int i = 0; i < impl.numOutputs_; ++i) {
@@ -1337,7 +1339,7 @@ void Synth::renderBlock(AudioSpan<float> buffer) noexcept
     impl.changedCCsThisCycle_.clear();
 
     { // Clear events and advance midi time
-        ScopedTiming logger { impl.callbackBreakdown_.dispatch, ScopedTiming::Operation::addToDuration };
+        ScopedTiming logger { impl.callbackBreakdown_.dispatch, ScopedTiming::Operation::addToDuration, impl.timed() };
         midiState.advanceTime(buffer.getNumFrames());
     }
 
@@ -1358,7 +1360,7 @@ void Synth::hdNoteOn(int delay, int noteNumber, float normalizedVelocity) noexce
     ASSERT(noteNumber < 128);
     ASSERT(noteNumber >= 0);
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     if (impl.lastKeyswitchLists_[noteNumber].empty())
         impl.resources_.getMidiState().noteOnEvent(delay, noteNumber, normalizedVelocity);
@@ -1377,7 +1379,7 @@ void Synth::hdNoteOff(int delay, int noteNumber, float normalizedVelocity) noexc
     ASSERT(noteNumber < 128);
     ASSERT(noteNumber >= 0);
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     // FIXME: Some keyboards (e.g. Casio PX5S) can send a real note-off velocity. In this case, do we have a
     // way in sfz to specify that a release trigger should NOT use the note-on velocity?
@@ -1579,7 +1581,7 @@ void Synth::Impl::performHdcc(int delay, int ccNumber, float normValue, bool asM
     ASSERT(ccNumber < config::numCCs);
     ASSERT(ccNumber >= 0);
 
-    ScopedTiming logger { dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { dispatchDuration_, ScopedTiming::Operation::addToDuration, timed() };
 
     changedCCsThisCycle_.set(ccNumber);
 
@@ -1643,7 +1645,7 @@ void Synth::hdPitchWheel(int delay, float normalizedPitch) noexcept
 {
     Impl& impl = *impl_;
 
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
     impl.resources_.getMidiState().pitchBendEvent(delay, normalizedPitch);
 
     for (const Impl::LayerPtr& layer : impl.layers_) {
@@ -1676,7 +1678,7 @@ void Synth::channelAftertouch(int delay, int aftertouch) noexcept
 void Synth::hdChannelAftertouch(int delay, float normAftertouch) noexcept
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getMidiState().channelAftertouchEvent(delay, normAftertouch);
 
@@ -1701,7 +1703,7 @@ void Synth::polyAftertouch(int delay, int noteNumber, int aftertouch) noexcept
 void Synth::hdPolyAftertouch(int delay, int noteNumber, float normAftertouch) noexcept
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getMidiState().polyAftertouchEvent(delay, noteNumber, normAftertouch);
 
@@ -1716,7 +1718,7 @@ void Synth::hdPolyAftertouch(int delay, int noteNumber, float normAftertouch) no
 void Synth::tempo(int delay, float secondsPerBeat) noexcept
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getBeatClock().setTempo(delay, secondsPerBeat);
 }
@@ -1730,7 +1732,7 @@ void Synth::bpmTempo(int delay, float beatsPerMinute) noexcept
 void Synth::timeSignature(int delay, int beatsPerBar, int beatUnit)
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getBeatClock().setTimeSignature(delay, TimeSignature(beatsPerBar, beatUnit));
 }
@@ -1738,7 +1740,7 @@ void Synth::timeSignature(int delay, int beatsPerBar, int beatUnit)
 void Synth::timePosition(int delay, int bar, double barBeat)
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     BeatClock& beatClock = impl.resources_.getBeatClock();
 
@@ -1757,7 +1759,7 @@ void Synth::timePosition(int delay, int bar, double barBeat)
 void Synth::playbackState(int delay, int playbackState)
 {
     Impl& impl = *impl_;
-    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
+    ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration, impl.timed() };
 
     impl.resources_.getBeatClock().setPlaying(delay, playbackState == 1);
 }
@@ -2316,6 +2318,9 @@ bool Synth::shouldReloadScala()
 const Synth::CallbackBreakdown& Synth::getCallbackBreakdown() const noexcept
 {
     Impl& impl = *impl_;
+    // The blocks and events from now on are timed (aud_dsp_sampler, ticket
+    // 30).
+    impl.breakdownAsked_.store(true, std::memory_order_relaxed);
     return impl.callbackBreakdown_;
 }
 

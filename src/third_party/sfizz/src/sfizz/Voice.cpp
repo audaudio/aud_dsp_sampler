@@ -315,9 +315,10 @@ struct Voice::Impl
 
     /**
      * @brief Save the modulation targets to avoid recomputing them in every callback.
-     * Must be called during startVoice() ideally.
+     * Must be called during startVoice() ideally. The layer keeps them for
+     * the next voice (aud_dsp_sampler, ticket 30).
      */
-    void saveModulationTargets(const Region* region) noexcept;
+    void saveModulationTargets(Layer& layer) noexcept;
 
     /**
      * @brief Get the sample quality determined by the active region.
@@ -697,7 +698,7 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
 
     ModMatrix& modMatrix = resources.getModMatrix();
     modMatrix.initVoice(impl.id_, region.getId(), impl.initialDelay_);
-    impl.saveModulationTargets(&region);
+    impl.saveModulationTargets(*layer);
 
     if (region.checkSustain) {
         const bool sustainPressed =
@@ -2407,18 +2408,32 @@ void Voice::Impl::resetSmoothers() noexcept
     gainSmoother_.reset(0.0f);
 }
 
-void Voice::Impl::saveModulationTargets(const Region* region) noexcept
+void Voice::Impl::saveModulationTargets(Layer& layer) noexcept
 {
-    ModMatrix& mm = resources_.getModMatrix();
-    masterAmplitudeTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::MasterAmplitude, region->getId()));
-    amplitudeTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Amplitude, region->getId()));
-    volumeTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Volume, region->getId()));
-    panTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Pan, region->getId()));
-    positionTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Position, region->getId()));
-    widthTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Width, region->getId()));
-    pitchTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::Pitch, region->getId()));
-    oscillatorDetuneTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::OscillatorDetune, region->getId()));
-    oscillatorModDepthTarget_ = mm.findTarget(ModKey::createNXYZ(ModId::OscillatorModDepth, region->getId()));
+    Layer::ModulationTargets& targets = layer.modulationTargets_;
+    if (!targets.found) {
+        const Region* region = &layer.getRegion();
+        ModMatrix& mm = resources_.getModMatrix();
+        targets.masterAmplitude = mm.findTarget(ModKey::createNXYZ(ModId::MasterAmplitude, region->getId()));
+        targets.amplitude = mm.findTarget(ModKey::createNXYZ(ModId::Amplitude, region->getId()));
+        targets.volume = mm.findTarget(ModKey::createNXYZ(ModId::Volume, region->getId()));
+        targets.pan = mm.findTarget(ModKey::createNXYZ(ModId::Pan, region->getId()));
+        targets.position = mm.findTarget(ModKey::createNXYZ(ModId::Position, region->getId()));
+        targets.width = mm.findTarget(ModKey::createNXYZ(ModId::Width, region->getId()));
+        targets.pitch = mm.findTarget(ModKey::createNXYZ(ModId::Pitch, region->getId()));
+        targets.oscillatorDetune = mm.findTarget(ModKey::createNXYZ(ModId::OscillatorDetune, region->getId()));
+        targets.oscillatorModDepth = mm.findTarget(ModKey::createNXYZ(ModId::OscillatorModDepth, region->getId()));
+        targets.found = true;
+    }
+    masterAmplitudeTarget_ = targets.masterAmplitude;
+    amplitudeTarget_ = targets.amplitude;
+    volumeTarget_ = targets.volume;
+    panTarget_ = targets.pan;
+    positionTarget_ = targets.position;
+    widthTarget_ = targets.width;
+    pitchTarget_ = targets.pitch;
+    oscillatorDetuneTarget_ = targets.oscillatorDetune;
+    oscillatorModDepthTarget_ = targets.oscillatorModDepth;
 }
 
 void Voice::enablePowerFollower() noexcept

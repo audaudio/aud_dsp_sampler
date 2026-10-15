@@ -47,9 +47,19 @@
 - Add envelope stages rendered as a whole
 
 - A sustain of the flex EG past its stage time fills its level; the other stages sum their times first and then take their levels
+
 - stepSum() sums a step as a loop of float additions does, bit for bit, mostly in vector runs
+
 - The sustain of the ADSR fills its level
+
 - The renders stay the same bit for bit
+
+- Add a voice start without walks, lookups and clock reads
+
+- A polyphony check over fewer candidates than its limit finds no voice to steal without walking them
+- A layer keeps the modulation targets of its region instead of nine lookups per start; a file identifier hashes its name once
+- The callback breakdown times blocks and events only once it was asked for
+- The renders and the voices stay the same bit for bit
 
 ## 0.3.2 - 2026-10-14
 

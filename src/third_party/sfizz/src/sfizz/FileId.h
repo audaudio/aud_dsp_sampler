@@ -4,7 +4,12 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm): an
+// identifier computes its hash once, which a voice that starts looks its
+// file up by, instead of hashing the file name at every lookup.
+
 #pragma once
+#include <cstddef>
 #include <string>
 #include <memory>
 #include <iosfwd>
@@ -19,6 +24,7 @@ struct FileId {
      * @brief Construct a null identifier.
      */
     FileId()
+        : hash_(hashOf(std::string(), false))
     {
     }
 
@@ -30,7 +36,8 @@ struct FileId {
      */
     explicit FileId(std::string filename, bool reverse = false)
         : filenameBuffer(new std::string(std::move(filename))),
-          reverse(reverse)
+          reverse(reverse),
+          hash_(hashOf(*filenameBuffer, reverse))
     {
     }
 
@@ -45,6 +52,7 @@ struct FileId {
         FileId id;
         id.filenameBuffer = filenameBuffer;
         id.reverse = reverse;
+        id.hash_ = hashOf(filename(), reverse);
         return id;
     }
 
@@ -88,9 +96,20 @@ struct FileId {
         return !operator==(other);
     }
 
+    /**
+     * @brief Get the hash of this identifier.
+     */
+    size_t hash() const noexcept
+    {
+        return hash_;
+    }
+
 private:
+    static size_t hashOf(const std::string& filename, bool reverse) noexcept;
+
     std::shared_ptr<std::string> filenameBuffer;
     bool reverse = false;
+    size_t hash_ = 0;
     static const std::string emptyFilename;
 };
 
