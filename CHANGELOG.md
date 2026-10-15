@@ -17,7 +17,17 @@
 - Add a walk over the busy voices only, per block and per event
 
 - The voice manager keeps a bit per voice that is not idle; the render loop and the loops of note-offs, controllers, pitch bend, aftertouch, off groups, all notes off and all sound off visit only those, in the order of the list
+
 - findFreeVoice() takes the first idle voice without a walk
+
+- The renders stay the same bit for bit
+
+- Add fused amplitude and pan passes of a voice
+
+- The gains of the amplitude stage take one pass; gain, pan, width, position and compensation take one more when they hold over the block (panMono(), panStereo())
+- A region without crossfade controllers skips the crossfade; the power follower runs only for the stealer that reads it
+- A modulation target with one source at depth 1 hands out the source buffer instead of a copy, a cycle keeps the copy
+- The stages of a voice are no longer timed for the callback breakdown
 - The renders stay the same bit for bit
 
 ## 0.3.2 - 2026-10-14

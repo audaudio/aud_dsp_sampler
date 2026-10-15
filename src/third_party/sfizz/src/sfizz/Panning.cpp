@@ -1,3 +1,10 @@
+// Modified by Audanika for aud_dsp_sampler (ticket 30 of aud_audio_pm):
+// panMono() and panStereo() apply the gain of a voice and a pan, a width and
+// a position that hold their values in one pass. They take the gains the
+// NEON code of pan() and width() takes on the frames it treats, and those of
+// the scalar code on the others, so that the result stays the same bit for
+// bit.
+
 #include "Panning.h"
 #include "MathHelpers.h"
 #include <array>
@@ -39,12 +46,23 @@ float panLookup(float pan)
     return panData[index];
 }
 
+// The gains of the scalar code for a pan of `value`, and for a width of
+// `value`: coeff1, coeff2.
+inline void scalarPanGains(float value, float& left, float& right)
+{
+    auto p = (value + 1.0f) * 0.5f;
+    p = clamp(p, 0.0f, 1.0f);
+    left = panLookup(p);
+    right = panLookup(1 - p);
+}
+
 inline void tickPan(const float* pan, float* leftBuffer, float* rightBuffer)
 {
-    auto p = (*pan + 1.0f) * 0.5f;
-    p = clamp(p, 0.0f, 1.0f);
-    *leftBuffer *= panLookup(p);
-    *rightBuffer *= panLookup(1 - p);
+    float left;
+    float right;
+    scalarPanGains(*pan, left, right);
+    *leftBuffer *= left;
+    *rightBuffer *= right;
 }
 
 void pan(const float* panEnvelope, float* leftBuffer, float* rightBuffer, unsigned size) noexcept
@@ -98,16 +116,22 @@ void pan(const float* panEnvelope, float* leftBuffer, float* rightBuffer, unsign
 
 }
 
+// The width of a frame in the scalar code; panStereo() shares it, so that
+// the compiler contracts its sums the same way for both.
+inline void widen(float coeff1, float coeff2, float& left, float& right)
+{
+    const auto l = left;
+    const auto r = right;
+    left = l * coeff2 + r * coeff1;
+    right = l * coeff1 + r * coeff2;
+}
+
 inline void tickWidth(const float* width, float* leftBuffer, float* rightBuffer)
 {
-    float w = (*width + 1.0f) * 0.5f;
-    w = clamp(w, 0.0f, 1.0f);
-    const auto coeff1 = panLookup(w);
-    const auto coeff2 = panLookup(1 - w);
-    const auto l = *leftBuffer;
-    const auto r = *rightBuffer;
-    *leftBuffer = l * coeff2 + r * coeff1;
-    *rightBuffer = l * coeff1 + r * coeff2;
+    float coeff1;
+    float coeff2;
+    scalarPanGains(*width, coeff1, coeff2);
+    widen(coeff1, coeff2, *leftBuffer, *rightBuffer);
 }
 
 void width(const float* widthEnvelope, float* leftBuffer, float* rightBuffer, unsigned size) noexcept
@@ -162,6 +186,115 @@ void width(const float* widthEnvelope, float* leftBuffer, float* rightBuffer, un
     while (widthEnvelope < sentinel) {
         tickWidth(widthEnvelope, leftBuffer, rightBuffer);
         incrementAll(widthEnvelope, leftBuffer, rightBuffer);
+    }
+}
+
+#if SFIZZ_HAVE_NEON
+// The frames pan() and width() treat with NEON when their envelope comes
+// from the buffer pool, which starts it aligned: those up to the last
+// multiple of 4 when both channels start aligned too, else none.
+inline unsigned neonFrames(const float* leftBuffer, const float* rightBuffer, unsigned size)
+{
+    if (unaligned<ByteAlignment>(leftBuffer, rightBuffer))
+        return 0;
+    return size & ~(TypeAlignment - 1);
+}
+
+// The gains the NEON code of pan() takes for a pan of `value`, and those of
+// width() for a width of `value`: coeff1, coeff2.
+inline void neonPanGains(float value, float& left, float& right)
+{
+    float32x4_t mmPan = vdupq_n_f32(value);
+    mmPan = vaddq_f32(mmPan, vdupq_n_f32(1.0f));
+    mmPan = vmulq_n_f32(mmPan, 0.5f * panSize);
+    mmPan = vaddq_f32(mmPan, vdupq_n_f32(0.5f));
+    uint32x4_t mmIdx = vcvtq_u32_f32(mmPan);
+    mmIdx = vminq_u32(mmIdx, vdupq_n_u32(panSize - 1));
+    mmIdx = vmaxq_u32(mmIdx, vdupq_n_u32(0));
+    const uint32_t index = vgetq_lane_u32(mmIdx, 0);
+    left = panData[index];
+    right = panData[panSize - index - 1];
+}
+#endif
+
+void panMono(float pan, float gain, const float* envelope,
+    float* leftBuffer, float* rightBuffer, unsigned size) noexcept
+{
+    // In place on the left, so that the compiler sees the left read and
+    // written at the same index and vectorizes.
+    const auto apply = [=](unsigned begin, unsigned end, float leftPan, float rightPan) {
+        for (unsigned i = begin; i < end; ++i) {
+            const float sample = envelope[i] * leftBuffer[i];
+            leftBuffer[i] = gain * (sample * leftPan);
+            rightBuffer[i] = gain * (sample * rightPan);
+        }
+    };
+
+    // The frames of the NEON code take its gains, the others those of the
+    // scalar code.
+    unsigned neon = 0;
+#if SFIZZ_HAVE_NEON
+    float neonLeft;
+    float neonRight;
+    neonPanGains(pan, neonLeft, neonRight);
+    neon = neonFrames(leftBuffer, rightBuffer, size);
+    apply(0, neon, neonLeft, neonRight);
+#endif
+    float left;
+    float right;
+    scalarPanGains(pan, left, right);
+    apply(neon, size, left, right);
+}
+
+void panStereo(float pan, float width, float position, float gain, const float* envelope,
+    float* leftBuffer, float* rightBuffer, unsigned size) noexcept
+{
+    float panLeft;
+    float panRight;
+    float coeff1;
+    float coeff2;
+    float positionLeft;
+    float positionRight;
+    unsigned i = 0;
+
+#if SFIZZ_HAVE_NEON
+    // The frames of the NEON code: the products apart from their sums, as
+    // its width() computes them, without a fused multiply-add.
+    neonPanGains(pan, panLeft, panRight);
+    neonPanGains(width, coeff1, coeff2);
+    neonPanGains(position, positionLeft, positionRight);
+    for (const unsigned neon = neonFrames(leftBuffer, rightBuffer, size); i < neon; ++i) {
+        float left = envelope[i] * leftBuffer[i];
+        float right = envelope[i] * rightBuffer[i];
+        left *= panLeft;
+        right *= panRight;
+        const float leftOfLeft = coeff2 * left;
+        const float leftOfRight = coeff1 * right;
+        const float rightOfLeft = coeff1 * left;
+        const float rightOfRight = coeff2 * right;
+        left = leftOfLeft + leftOfRight;
+        right = rightOfLeft + rightOfRight;
+        left *= positionLeft;
+        right *= positionRight;
+        leftBuffer[i] = gain * left;
+        rightBuffer[i] = gain * right;
+    }
+#endif
+
+    // The other frames as the scalar code treats them.
+    scalarPanGains(pan, panLeft, panRight);
+    scalarPanGains(width, coeff1, coeff2);
+    scalarPanGains(position, positionLeft, positionRight);
+    for (; i < size; ++i) {
+        float left = envelope[i] * leftBuffer[i];
+        float right = envelope[i] * rightBuffer[i];
+        left *= panLeft;
+        right *= panRight;
+        widen(coeff1, coeff2, left, right);
+        left *= positionLeft;
+        right *= positionRight;
+        leftBuffer[i] = gain * left;
+        rightBuffer[i] = gain * right;
     }
 }
 
