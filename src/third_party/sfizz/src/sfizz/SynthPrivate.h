@@ -4,7 +4,8 @@
 // the layers it drops from every list that points at them.
 // Ticket 30: the callback breakdown is timed only once it was asked for.
 // Ticket 31: the synth keeps the includes its last load could not read, and
-// whether note_offset keeps the outer keys of the regions.
+// whether note_offset keeps the outer keys of the regions; parseLoads()
+// decides for both loaders whether a parse makes an instrument.
 
 #pragma once
 
@@ -213,6 +214,14 @@ struct Synth::Impl final: public Parser::Listener {
      * state.
      */
     void finalizeSfzLoad();
+
+    /**
+     * @brief Whether the parse of a load makes an instrument, beside its
+     * parser errors (aud_dsp_sampler): not with a missing include, which it
+     * keeps for getMissingIncludes() (ticket 31), nor without regions when
+     * the parser reported an error (ticket 27).
+     */
+    bool parseLoads();
 
     /**
      * @brief Remove layers from the instrument and from every list that

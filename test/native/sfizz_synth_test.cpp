@@ -232,8 +232,9 @@ AUD_TEST(sfizz_synth_note_offset_open_bounds_keeps_the_outer_keys) {
   for (const auto& entry : cases) {
     AUD_CHECK(synth.loadSfzString("/aud_dsp_sampler/offset.sfz",
                                   "<control> " + entry.first + "\n" + regions));
-    AUD_CHECK(keysOf(synth) == entry.second);
-    if (keysOf(synth) != entry.second) std::printf("  with <control> %s\n", entry.first.c_str());
+    const Keys keys = keysOf(synth);
+    AUD_CHECK(keys == entry.second);
+    if (keys != entry.second) std::printf("  with <control> %s\n", entry.first.c_str());
   }
   // The keys the open bounds keep play: shifted by -12, key 120 plays the
   // region that ends at 127 only with the opcode.

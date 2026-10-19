@@ -29,7 +29,9 @@
 // default_path the last <control> set; every <control> sets default_path
 // back to none.
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -44,9 +46,9 @@ using namespace aud_sampler_test;
 
 namespace {
 
-// The level of a sine of 0.5 at velocity 100 (see aud_sampler_test.cpp),
-// halved by amplitude=50 of common/level.sfz.
-constexpr float kHalfLevel = 0.0826f / 2;
+// The level of the presets: kLevel, halved by amplitude=50 of
+// common/level.sfz.
+constexpr float kHalfLevel = kLevel / 2;
 // Below it a note counts as silent.
 constexpr float kSilence = 1e-4f;
 
@@ -61,14 +63,18 @@ std::vector<float> sineFrames(double frequency, uint32_t frames) {
   return sine(frequency, frames / kRate);
 }
 
+// The loop of high.flac as opcodes.
+const std::string kLoop = "loop_mode=loop_continuous loop_start=" + std::to_string(kLoopStart) +
+                          " loop_end=" + std::to_string(kLoopEnd);
+
 // The regions of the set: the low one from key 0 to 63 sounds 750 Hz on
 // key 12, the high one from 64 to 127 sounds 375 Hz on key 115 and loops.
-const char* const kRegions =
+const std::string kRegions =
     "// The regions of the set only; the samples resolve against the\n"
     "// default_path of the file that includes them.\n"
     "<region> sample=samples/low.wav lokey=0 hikey=63 pitch_keycenter=12\n"
-    "<region> sample=samples/high.flac lokey=64 hikey=127 pitch_keycenter=115 "
-    "loop_mode=loop_continuous loop_start=6400 loop_end=12799\n";
+    "<region> sample=samples/high.flac lokey=64 hikey=127 pitch_keycenter=115 " +
+    kLoop + "\n";
 
 // A preset of the set $SET shifted by $SHIFT keys, with more control
 // opcodes in `control`.
@@ -173,7 +179,7 @@ struct Played {
 Played play(Fixture& f, int32_t node, uint32_t note, uint32_t frames = 9600) {
   f.noteOn(node, note);
   f.renderOffline(frames);
-  const size_t from = f.left.size() - frames + 480;
+  const size_t from = since(f, frames, 480);
   const Played played{frequencyOf(f.left, from, f.left.size()), peak(f.left, from, f.left.size())};
   f.noteOff(node, note);
   f.renderOffline(4800);
@@ -197,6 +203,12 @@ bool silent(Fixture& f, int32_t node, uint32_t note) {
   const Played played = play(f, node, note);
   if (played.level >= kSilence) std::printf("  note %u sounds at %.4f\n", note, played.level);
   return played.level < kSilence;
+}
+
+// The first `count` paths the backend opened, fewer when it opened fewer.
+std::vector<std::string> firstOf(const std::vector<std::string>& paths, size_t count) {
+  const auto end = paths.begin() + static_cast<std::ptrdiff_t>(std::min(count, paths.size()));
+  return std::vector<std::string>(paths.begin(), end);
 }
 
 // The frequency of `semitones` above a sample of `frequency` Hz.
@@ -230,8 +242,8 @@ void playsThePresets(Via via) {
   // ended long ago.
   f.noteOn(node, 103);
   f.renderOffline(48000);
-  AUD_CHECK_NEAR(peak(f.left, f.left.size() - 4800, f.left.size()), kHalfLevel, 0.003);
-  AUD_CHECK_NEAR(frequencyOf(f.left, f.left.size() - 4800, f.left.size()), 375.0, 1.0);
+  AUD_CHECK_NEAR(peak(f.left, since(f, 4800), f.left.size()), kHalfLevel, 0.003);
+  AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 4800), f.left.size()), 375.0, 1.0);
   f.noteOff(node, 103);
   f.renderOffline(4800);
 
@@ -304,19 +316,15 @@ AUD_TEST(plays_a_sample_set_alone_and_reads_the_includes_through_the_backend) {
   AUD_CHECK_NEAR(play(f, node, 115).frequency, 375.0, 1.0);
   // The backend read the root file and its include.
   const std::vector<std::string>& paths = assets.backend->openedPaths;
-  AUD_CHECK(paths.size() >= 2 && paths[0] == "samplesets/sines/instrument.sfz" &&
-            paths[1] == "samplesets/sines/regions.sfz");
+  AUD_CHECK(firstOf(paths, 2) == (std::vector<std::string>{"samplesets/sines/instrument.sfz",
+                                                           "samplesets/sines/regions.sfz"}));
   // A preset reads the includes it names, nested ones relative to the root
   // file, then the samples.
   assets.backend->openedPaths.clear();
   AUD_CHECK(loadPreset(f, node, folder, Via::apk, "presets/up/main.sfz").result == AUD_OK);
-  AUD_CHECK(paths.size() >= 4);
-  if (paths.size() >= 4) {
-    AUD_CHECK(paths[0] == "presets/up/main.sfz");
-    AUD_CHECK(paths[1] == "common/engine.sfz");
-    AUD_CHECK(paths[2] == "common/level.sfz");
-    AUD_CHECK(paths[3] == "samplesets/sines/regions.sfz");
-  }
+  AUD_CHECK(firstOf(paths, 4) == (std::vector<std::string>{"presets/up/main.sfz",
+                                                           "common/engine.sfz", "common/level.sfz",
+                                                           "samplesets/sines/regions.sfz"}));
 }
 
 AUD_TEST(a_second_control_sets_the_default_path_back_to_none) {
@@ -373,8 +381,8 @@ AUD_TEST(fails_a_load_whose_include_is_missing_and_names_it) {
             "sfizz could not read 2 includes: ../../common/gone.sfz, lost.sfz");
   // The instrument that played plays on.
   f.renderOffline(4800);
-  AUD_CHECK_NEAR(frequencyOf(f.left, f.left.size() - 4800, f.left.size()), 375.0, 1.0);
-  AUD_CHECK_NEAR(peak(f.left, f.left.size() - 4800, f.left.size()), kHalfLevel, 0.003);
+  AUD_CHECK_NEAR(frequencyOf(f.left, since(f, 4800), f.left.size()), 375.0, 1.0);
+  AUD_CHECK_NEAR(peak(f.left, since(f, 4800), f.left.size()), kHalfLevel, 0.003);
 }
 
 // ############################################################################
@@ -389,11 +397,10 @@ AUD_TEST(plays_a_flac_sample_like_the_wav_of_its_frames_with_its_loop) {
   writeFlac(folder.file("opcodes.flac"), frames);
   writeFlac(folder.file("smpl.flac"), frames, 48000, kLoopStart, kLoopEnd);
   writeWav(folder.file("frames.wav"), quantized16(frames));
-  const std::string loop = "loop_mode=loop_continuous loop_start=" + std::to_string(kLoopStart) +
-                           " loop_end=" + std::to_string(kLoopEnd);
-  writeText(folder.file("wav.sfz"), "<region> sample=frames.wav pitch_keycenter=69 " + loop + "\n");
+  writeText(folder.file("wav.sfz"),
+            "<region> sample=frames.wav pitch_keycenter=69 " + kLoop + "\n");
   writeText(folder.file("opcodes.sfz"),
-            "<region> sample=opcodes.flac pitch_keycenter=69 " + loop + "\n");
+            "<region> sample=opcodes.flac pitch_keycenter=69 " + kLoop + "\n");
   writeText(folder.file("smpl.sfz"), "<region> sample=smpl.flac pitch_keycenter=69\n");
   ScopedApkAssets assets(folder.path);
   const auto render = [](const std::string& file, uint32_t note) {

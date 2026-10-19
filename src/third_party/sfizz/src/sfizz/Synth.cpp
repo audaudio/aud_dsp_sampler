@@ -684,6 +684,19 @@ static std::vector<std::string> missingIncludesOf(const Parser& parser)
     return includes;
 }
 
+bool Synth::Impl::parseLoads()
+{
+    // A missing include fails the load, unlike other errors of the parser:
+    // the instrument would lack what it includes (ticket 31).
+    missingIncludes_ = missingIncludesOf(parser_);
+    if (!missingIncludes_.empty())
+        return false;
+
+    // An instrument without regions loads, unless the parser reported an
+    // error, e.g. a file it cannot read (ticket 27).
+    return !layers_.empty() || parser_.getErrorCount() == 0;
+}
+
 bool Synth::loadSfzFile(const fs::path& file)
 {
     Impl& impl = *impl_;
@@ -702,14 +715,7 @@ bool Synth::loadSfzFile(const fs::path& file)
     if (!loaderParsesPermissively)
         success = parser.getErrorCount() == 0;
 
-    // A missing include fails the load, unlike other errors of the parser:
-    // the instrument would lack what it includes (aud_dsp_sampler, ticket 31).
-    impl.missingIncludes_ = missingIncludesOf(parser);
-    success = success && impl.missingIncludes_.empty();
-
-    // An instrument without regions loads, unless the parser reported an
-    // error, e.g. a file it cannot read (aud_dsp_sampler, ticket 27).
-    success = success && (!impl.layers_.empty() || parser.getErrorCount() == 0);
+    success = impl.parseLoads() && success;
 
     if (!success) {
         DBG("[sfizz] Loading failed");
@@ -736,13 +742,7 @@ bool Synth::loadSfzString(const fs::path& path, absl::string_view text)
     if (!loaderParsesPermissively)
         success = parser.getErrorCount() == 0;
 
-    // A missing include fails the load (aud_dsp_sampler, ticket 31).
-    impl.missingIncludes_ = missingIncludesOf(parser);
-    success = success && impl.missingIncludes_.empty();
-
-    // An instrument without regions loads, unless the parser reported an
-    // error, e.g. a file it cannot read (aud_dsp_sampler, ticket 27).
-    success = success && (!impl.layers_.empty() || parser.getErrorCount() == 0);
+    success = impl.parseLoads() && success;
 
     if (!success) {
         auto& filePool = impl.resources_.getFilePool();

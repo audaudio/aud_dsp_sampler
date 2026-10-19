@@ -7,11 +7,22 @@
 - Add note_offset_open_bounds and fail on missing includes
 
 - The fork of sfizz fails a load whose #include names a file it cannot read, even beside regions that load; Synth::getMissingIncludes() names them relative to the folder of the SFZ file, Parser::getMissingIncludes() lexically normal
-- The node's load message names them: &quot;sfizz could not read 1 include: ../../samplesets/x/regions.sfz&quot;
+
+- The node's load message names them: "sfizz could not read 1 include: ../../samplesets/x/regions.sfz"
+
 - note_offset_open_bounds in <control>: under note_offset and octave_offset a region that reached key 0 or 127 still reaches it; off by default, the goldens render the same bit for bit
+
 - Native tests of presets that include a sample set from files, apk:/ assets and SFZ text with a virtual path: includes relative to the root file, $ variables in include paths and opcode values, default_path and its reset by a second <control>, note_offset of -12 and +12 with and without the opcode, missing includes
+
 - FLAC samples that the tests write render like the WAV of their frames, with the loop from the SFZ file or from a smpl chunk
+
 - A Dart test of the message of a missing include; the README, NOTICES.md, the C header and the Dart docs describe the layout, the opcode and the failure
+
+- Add one parse check and shared helpers for the tests
+
+- Synth::Impl::parseLoads() holds what loadSfzFile() and loadSfzString() both checked after a parse: a missing include fails the load, an instrument without regions only without parser errors
+- The FLAC writer of the native tests in named steps: FlacBits with its CRC, STREAMINFO, the smpl loop, a frame; the files it writes stay byte for byte the same
+- kLevel and since() move into the test fixture; the sample set test builds its loop opcodes from kLoopStart and kLoopEnd and compares the paths the backend opened as whole lists
 
 ## 0.3.3 - 2026-10-15
 
