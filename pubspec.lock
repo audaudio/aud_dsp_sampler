@@ -319,10 +319,10 @@ packages:
     dependency: "direct dev"
     description:
       name: helix
-      sha256: e7aa11c1238624f942cd8c1f596978c5ad8add2b3e783ebad6afb4826108482a
+      sha256: "10aa0e08729e50a7e38079c438538e562e81413ed249ae948d0dcaacdb052402"
       url: "https://pub.dev"
     source: hosted
-    version: "1.12.0"
+    version: "1.13.0"
   hooks:
     dependency: "direct main"
     description:
