@@ -219,9 +219,16 @@ std::string unavailableOf(const Source& source) {
   return reason;
 }
 
-// Why a load failed: what sfizz could not load and the first error of its
-// parser.
+// Why a load failed: the includes sfizz could not read, relative to the
+// folder of the SFZ file, e.g. "sfizz could not read 1 include:
+// ../common.sfz" (ticket 31), or else what sfizz could not load and the
+// first error of its parser. The load's name holds the SFZ file; short
+// names keep the message within what an engine keeps of it, 255 bytes in
+// aud_audio_graph.
 std::string failureOf(const sfz::Synth& synth, const std::string& what) {
+  const std::string includes =
+      listOf("sfizz could not read", "include", "includes", synth.getMissingIncludes());
+  if (!includes.empty()) return includes;
   std::string message = "sfizz could not load " + what;
   const std::vector<std::string>& errors = synth.getParseErrors();
   if (!errors.empty()) message += ": " + errors.front();

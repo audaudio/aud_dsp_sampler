@@ -8,6 +8,8 @@
 // virtual path, e.g. "apk:/piano.sfz" for an asset of an Android APK, is
 // read from its backend and counts as absolute, so that its includes and
 // samples resolve inside the backend (VirtualFile.h).
+// Ticket 31: an #include whose file cannot be read is named in
+// getMissingIncludes(), and its error names the file lexically normal.
 
 #include "Parser.h"
 #include "ParserListener.h"
@@ -33,6 +35,7 @@ void Parser::clear()
     _currentOpcodes.clear();
     _errorCount = 0;
     _warningCount = 0;
+    _missingIncludes.clear();
 }
 
 void Parser::addExternalDefinition(absl::string_view id, absl::string_view value)
@@ -97,13 +100,25 @@ void Parser::includeNewFile(const fs::path& path, std::unique_ptr<Reader> reader
         return;
     }
 
-    if (!reader && VirtualFiles::isVirtual(fullPath.string())) {
+    // A file that cannot be read, named lexically normal: an #include of it
+    // counts as missing (aud_dsp_sampler, ticket 31); the root file fails
+    // the parse as before.
+    const bool virtualFile = VirtualFiles::isVirtual(fullPath.string());
+    auto cannotRead = [&](const std::string& why) {
+        const std::string normalPath = virtualFile
+            ? VirtualFiles::normalized(fullPath.string())
+            : fullPath.lexically_normal().string();
+        if (includeStmtRange)
+            _missingIncludes.push_back(normalPath);
+        emitError(makeErrorRange(), why + normalPath);
+    };
+
+    if (!reader && virtualFile) {
         std::unique_ptr<VirtualFileData> data = VirtualFiles::open(fullPath.string());
         if (!data) {
-            const std::string why = VirtualFiles::backendOf(fullPath.string())
+            cannotRead(VirtualFiles::backendOf(fullPath.string())
                 ? "Cannot open file for reading: "
-                : "No backend serves " + VirtualFiles::schemeOf(fullPath.string()) + ":/ paths on this platform: ";
-            emitError(makeErrorRange(), why + fullPath.string());
+                : "No backend serves " + VirtualFiles::schemeOf(fullPath.string()) + ":/ paths on this platform: ");
             return;
         }
         reader = absl::make_unique<VirtualFileReader>(fullPath, std::move(data));
@@ -112,8 +127,7 @@ void Parser::includeNewFile(const fs::path& path, std::unique_ptr<Reader> reader
     if (!reader) {
         auto fileReader = absl::make_unique<FileReader>(fullPath);
         if (fileReader->hasError()) {
-            SourceLocation loc = fileReader->location();
-            emitError(makeErrorRange(), "Cannot open file for reading: " + fullPath.string());
+            cannotRead("Cannot open file for reading: ");
             return;
         }
         reader = std::move(fileReader);

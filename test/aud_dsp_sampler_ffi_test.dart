@@ -153,6 +153,42 @@ void main() {
       ], List.filled(ids.length, AUD_OK));
     });
 
+    test('fails a load whose include is missing and names it', () {
+      // A preset that includes the regions of a sample set that is not
+      // there (ticket 31): the load fails, although a region of its own
+      // loads, and names the include relative to the preset's folder.
+      final directory = Directory.systemTemp.createTempSync('aud_dsp_sampler_');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final graph = samplerGraph();
+      final node = graph.createNode(AudSfzSampler.typeId);
+      graph.transaction((tx) => tx.connect(node, graph.io));
+      graph.start();
+      graph.setString(
+        node,
+        AudSfzSampler.sfzVirtualPath,
+        '${directory.path}/preset.sfz',
+      );
+      final id = graph.setString(
+        node,
+        AudSfzSampler.sfzText,
+        '#define \$SET gone\n'
+        '<region> sample=*sine\n'
+        '#include "samplesets/\$SET/regions.sfz"\n',
+      );
+      expect(
+        graph.waitLoads(node: node, timeout: const Duration(seconds: 10)),
+        isTrue,
+      );
+      final load = graph.loadOf(id)!;
+      expect(
+        (load.result, load.message),
+        (
+          AUD_ERROR_FAILED,
+          'sfizz could not read 1 include: samplesets/gone/regions.sfz',
+        ),
+      );
+    });
+
     group('the voices of the process', () {
       // The budget and the reserve belong to the process: each test leaves
       // them as it found them. No other suite renders live, so the voices

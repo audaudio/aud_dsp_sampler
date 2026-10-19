@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 31 of aud_audio_pm):
+// offsetAllKeys() keeps the outer keys of the key range when it is asked
+// to (note_offset_open_bounds).
+
 #include "Region.h"
 #include "Defaults.h"
 #include "Opcode.h"
@@ -1800,14 +1804,17 @@ float sfz::Region::getPhase() const noexcept
     return phase;
 }
 
-void sfz::Region::offsetAllKeys(int offset) noexcept
+void sfz::Region::offsetAllKeys(int offset, bool openBounds) noexcept
 {
-    // Offset key range
+    // Offset key range; with open bounds, a range that reached the lowest or
+    // the highest key still reaches it (aud_dsp_sampler, ticket 31)
     if (keyRange != Default::key.bounds) {
         const auto start = keyRange.getStart();
         const auto end = keyRange.getEnd();
-        keyRange.setStart(offsetAndClampKey(start, offset));
-        keyRange.setEnd(offsetAndClampKey(end, offset));
+        const auto lowest = Default::key.bounds.getStart();
+        const auto highest = Default::key.bounds.getEnd();
+        keyRange.setStart(openBounds && start == lowest ? lowest : offsetAndClampKey(start, offset));
+        keyRange.setEnd(openBounds && end == highest ? highest : offsetAndClampKey(end, offset));
     }
     pitchKeycenter = offsetAndClampKey(pitchKeycenter, offset);
 

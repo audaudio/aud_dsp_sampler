@@ -9,11 +9,15 @@
 // whose samples it cannot read, and that an instrument without regions
 // loads (ticket 27); that its own polyphony leaves out the voices a voice
 // limit of the host stole (ticket 29); that it times its blocks only once
-// the callback breakdown is asked for (ticket 30).
+// the callback breakdown is asked for (ticket 30); that a missing include
+// fails a load and that note_offset_open_bounds keeps the outer keys under
+// note_offset (ticket 31).
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "AudioSpan.h"
@@ -152,4 +156,101 @@ AUD_TEST(sfizz_synth_times_its_blocks_once_the_breakdown_is_asked_for) {
   synth.renderBlock(sfz::AudioSpan<float>(channels, 2, 0, 256));
   AUD_CHECK(synth.getCallbackBreakdown().renderMethod > 0);
   AUD_CHECK(breakdown.data == 0 && breakdown.amplitude == 0 && breakdown.filters == 0 && breakdown.panning == 0);
+}
+
+// ############################################################################
+// Includes that are missing (ticket 31)
+
+AUD_TEST(sfizz_synth_fails_a_load_whose_include_is_missing) {
+  // Beside a region that loads, an include that is not there fails the
+  // load. The synth names it lexically normal and relative to the folder of
+  // the SFZ file, the error names the whole path.
+  sfz::Synth synth;
+  AUD_CHECK(!synth.loadSfzString("/aud_dsp_sampler/presets/a/main.sfz",
+                                 "<region> sample=*sine\n#include \"../../sets/x/../gone.sfz\"\n"));
+  AUD_CHECK(synth.getMissingIncludes() == std::vector<std::string>{"../../sets/gone.sfz"});
+  AUD_CHECK(!synth.getParseErrors().empty() &&
+            synth.getParseErrors().front() ==
+                "main.sfz at line 2: Cannot open file for reading: /aud_dsp_sampler/sets/gone.sfz");
+  // A virtual path that no backend serves is missing too, named whole
+  // below its own root.
+  AUD_CHECK(!synth.loadSfzString("/aud_dsp_sampler/main.sfz",
+                                 "<region> sample=*sine\n#include \"xy:/a/../b.sfz\"\n"));
+  AUD_CHECK(synth.getMissingIncludes() == std::vector<std::string>{"xy:/b.sfz"});
+  // The next load forgets them; a root file that cannot be read fails as
+  // before and is no include.
+  AUD_CHECK(synth.loadSfzString("/aud_dsp_sampler/main.sfz", "<region> sample=*sine\n"));
+  AUD_CHECK(synth.getMissingIncludes().empty());
+  AUD_CHECK(!synth.loadSfzFile("/aud_dsp_sampler/does-not-exist.sfz"));
+  AUD_CHECK(synth.getMissingIncludes().empty());
+}
+
+// ############################################################################
+// note_offset_open_bounds (ticket 31)
+
+namespace {
+
+// The key range and the key center of every region of a synth.
+std::vector<std::vector<int>> keysOf(const sfz::Synth& synth) {
+  std::vector<std::vector<int>> keys;
+  for (int i = 0; i < synth.getNumRegions(); ++i) {
+    const sfz::Region* region = synth.getRegionView(i);
+    keys.push_back({region->keyRange.getStart(), region->keyRange.getEnd(),
+                    region->pitchKeycenter});
+  }
+  return keys;
+}
+
+}  // namespace
+
+AUD_TEST(sfizz_synth_note_offset_open_bounds_keeps_the_outer_keys) {
+  // A region from key 0, one inside, one up to key 127, one without keys.
+  const std::string regions =
+      "<region> sample=*sine lokey=0 hikey=63 pitch_keycenter=12\n"
+      "<region> sample=*sine lokey=30 hikey=40 pitch_keycenter=35\n"
+      "<region> sample=*sine lokey=64 hikey=127 pitch_keycenter=115\n"
+      "<region> sample=*sine pitch_keycenter=60\n";
+  using Keys = std::vector<std::vector<int>>;
+  const Keys none{{0, 63, 12}, {30, 40, 35}, {64, 127, 115}, {0, 127, 60}};
+  const Keys down{{0, 51, 0}, {18, 28, 23}, {52, 115, 103}, {0, 127, 48}};
+  const Keys downOpen{{0, 51, 0}, {18, 28, 23}, {52, 127, 103}, {0, 127, 48}};
+  const Keys up{{12, 75, 24}, {42, 52, 47}, {76, 127, 127}, {0, 127, 72}};
+  const Keys upOpen{{0, 75, 24}, {42, 52, 47}, {76, 127, 127}, {0, 127, 72}};
+  // One synth for all: every load starts without the opcode.
+  sfz::Synth synth;
+  const std::vector<std::pair<std::string, Keys>> cases = {
+      {"", none},
+      {"note_offset_open_bounds=on", none},
+      {"note_offset=-12", down},
+      {"note_offset=-12 note_offset_open_bounds=on", downOpen},
+      {"octave_offset=-1 note_offset_open_bounds=1", downOpen},
+      {"note_offset=-12 note_offset_open_bounds=off", down},
+      {"note_offset=-12", down},
+      {"note_offset=12", up},
+      {"note_offset_open_bounds=on note_offset=12", upOpen},
+  };
+  for (const auto& entry : cases) {
+    AUD_CHECK(synth.loadSfzString("/aud_dsp_sampler/offset.sfz",
+                                  "<control> " + entry.first + "\n" + regions));
+    const Keys keys = keysOf(synth);
+    AUD_CHECK(keys == entry.second);
+    if (keys != entry.second) std::printf("  with <control> %s\n", entry.first.c_str());
+  }
+  // The keys the open bounds keep play: shifted by -12, key 120 plays the
+  // region that ends at 127 only with the opcode.
+  const std::string outer =
+      "<region> sample=*sine lokey=0 hikey=63 pitch_keycenter=12\n"
+      "<region> sample=*sine lokey=64 hikey=127 pitch_keycenter=115\n";
+  for (bool open : {false, true}) {
+    sfz::Synth player;
+    player.setSamplesPerBlock(256);
+    AUD_CHECK(player.loadSfzString(
+        "/aud_dsp_sampler/outer.sfz",
+        std::string("<control> note_offset=-12 note_offset_open_bounds=") + (open ? "on" : "off") +
+            "\n" + outer));
+    player.noteOn(0, 120, 100);
+    AUD_CHECK(player.getNumActiveVoices() == (open ? 1 : 0));
+    player.noteOn(0, 0, 100);
+    AUD_CHECK(player.getNumActiveVoices() == (open ? 2 : 1));
+  }
 }

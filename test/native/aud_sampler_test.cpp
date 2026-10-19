@@ -26,12 +26,6 @@ using namespace aud_sampler_test;
 
 namespace {
 
-// The level of a sine of 0.5 at velocity 100: (100/127)^2 for the velocity,
-// the same again for the MIDI volume sfizz starts with (CC 7 at 100 on
-// curve 4) and -7.35 dB of sfizz's master volume. Centred, a mono sample
-// keeps its level on both channels.
-constexpr float kLevel = 0.0826f;
-
 // An instrument of one sine sample that sounds at its own frequency on
 // note 69.
 std::string sineInstrument(TempFolder& folder, const std::string& name,
@@ -50,11 +44,6 @@ std::string loopInstrument(TempFolder& folder, const std::string& name,
   return "<region> sample=" + name + ".wav pitch_keycenter=69 " +
          "loop_mode=loop_continuous loop_start=0 loop_end=" +
          std::to_string(frames - 1) + " " + opcodes + "\n";
-}
-
-// The index of a frame of the last render: `from` frames after its start.
-size_t since(const Fixture& f, uint32_t rendered, uint32_t from = 0) {
-  return f.left.size() - rendered + from;
 }
 
 // A Scala scale of twelve equal steps of 110 cents: A4 stays, A#4 rises by

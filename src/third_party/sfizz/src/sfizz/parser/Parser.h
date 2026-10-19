@@ -4,6 +4,10 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 31 of aud_audio_pm): the
+// parser names the files of the #include directives it could not read, so
+// that a load can fail on them.
+
 #pragma once
 #include "../Opcode.h"
 #include <ghc/fs_std.hpp>
@@ -12,6 +16,7 @@
 #include <absl/container/flat_hash_set.h>
 #include <string>
 #include <memory>
+#include <vector>
 
 namespace sfz {
 
@@ -50,6 +55,13 @@ public:
 
     size_t getErrorCount() const noexcept { return _errorCount; }
     size_t getWarningCount() const noexcept { return _warningCount; }
+
+    /**
+     * @brief The files of the #include directives of the last parse that it
+     * could not read, lexically normal, e.g. "/a/common.sfz" or
+     * "apk:/content/common.sfz"; the root file is not among them.
+     */
+    const std::vector<std::string>& getMissingIncludes() const noexcept { return _missingIncludes; }
 
     using Listener = ParserListener;
 
@@ -113,6 +125,7 @@ private:
     // errors and warnings
     size_t _errorCount = 0;
     size_t _warningCount = 0;
+    std::vector<std::string> _missingIncludes;
 };
 
 /**

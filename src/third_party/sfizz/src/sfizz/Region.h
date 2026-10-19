@@ -4,6 +4,9 @@
 // license. You should have receive a LICENSE.md file along with the code.
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
+// Modified by Audanika for aud_dsp_sampler (ticket 31 of aud_audio_pm):
+// offsetAllKeys() can keep the outer keys of the region.
+
 #pragma once
 #include "CCMap.h"
 #include "Curve.h"
@@ -196,7 +199,15 @@ struct Region {
      */
     bool processGenericCc(const Opcode& opcode, OpcodeSpec<float> spec, const ModKey& target);
 
-    void offsetAllKeys(int offset) noexcept;
+    /**
+     * @brief Shifts the keys of the region by `offset`, clamped to 0 to 127:
+     *        note_offset and octave_offset.
+     *
+     * @param openBounds keeps the outer keys: a key range that started at 0
+     *        still starts there, one that ended at 127 still ends there
+     *        (note_offset_open_bounds, aud_dsp_sampler).
+     */
+    void offsetAllKeys(int offset, bool openBounds = false) noexcept;
 
     /**
      * @brief Get the gain this region contributes into the input of the Nth

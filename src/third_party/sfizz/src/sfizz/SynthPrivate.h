@@ -3,6 +3,9 @@
 // time of the file pool's garbage collection is gone with it. A load removes
 // the layers it drops from every list that points at them.
 // Ticket 30: the callback breakdown is timed only once it was asked for.
+// Ticket 31: the synth keeps the includes its last load could not read, and
+// whether note_offset keeps the outer keys of the regions; parseLoads()
+// decides for both loaders whether a parse makes an instrument.
 
 #pragma once
 
@@ -213,6 +216,14 @@ struct Synth::Impl final: public Parser::Listener {
     void finalizeSfzLoad();
 
     /**
+     * @brief Whether the parse of a load makes an instrument, beside its
+     * parser errors (aud_dsp_sampler): not with a missing include, which it
+     * keeps for getMissingIncludes() (ticket 31), nor without regions when
+     * the parser reported an error (ticket 27).
+     */
+    bool parseLoads();
+
+    /**
      * @brief Remove layers from the instrument and from every list that
      * points at them: the keyswitch lists and the sets the parser filled,
      * and the activation lists of the load (aud_dsp_sampler, ticket 25).
@@ -355,6 +366,9 @@ struct Synth::Impl final: public Parser::Listener {
     // ticket 25).
     std::vector<std::string> missingSamples_;
     std::vector<std::string> parseErrors_;
+    // The files of the #include directives the last load could not read
+    // (aud_dsp_sampler, ticket 31).
+    std::vector<std::string> missingIncludes_;
 
     // Control opcodes
     std::string defaultPath_ { "" };
@@ -362,6 +376,9 @@ struct Synth::Impl final: public Parser::Listener {
     std::string image_controls_ { "" };
     int noteOffset_ { Default::noteOffset };
     int octaveOffset_ { Default::octaveOffset };
+    // note_offset_open_bounds: a region that reached key 0 or 127 before
+    // the offset still reaches it (aud_dsp_sampler, ticket 31).
+    bool noteOffsetOpenBounds_ { Default::noteOffsetOpenBounds };
 
     // Modulation source generators
     std::unique_ptr<ControllerSource> genController_;
