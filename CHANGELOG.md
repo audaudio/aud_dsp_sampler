@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add note_offset_open_bounds and fail on missing includes
+
+- The fork of sfizz fails a load whose #include names a file it cannot read, even beside regions that load; Synth::getMissingIncludes() names them relative to the folder of the SFZ file, Parser::getMissingIncludes() lexically normal
+- The node's load message names them: &quot;sfizz could not read 1 include: ../../samplesets/x/regions.sfz&quot;
+- note_offset_open_bounds in <control>: under note_offset and octave_offset a region that reached key 0 or 127 still reaches it; off by default, the goldens render the same bit for bit
+- Native tests of presets that include a sample set from files, apk:/ assets and SFZ text with a virtual path: includes relative to the root file, $ variables in include paths and opcode values, default_path and its reset by a second <control>, note_offset of -12 and +12 with and without the opcode, missing includes
+- FLAC samples that the tests write render like the WAV of their frames, with the loop from the SFZ file or from a smpl chunk
+- A Dart test of the message of a missing include; the README, NOTICES.md, the C header and the Dart docs describe the layout, the opcode and the failure
+
 ## 0.3.3 - 2026-10-15
 
 ### Added
@@ -90,6 +103,7 @@
 
 - The German README names the interpolation and the envelope
 
+
 ## 0.3.2 - 2026-10-14
 
 ### Added
@@ -135,6 +149,7 @@
 - The steps of max_voices from kNoVoiceLimit; a compile-time check that the voice counters take no lock
 
 - The parameters of stealVoices and fadeOutStolen documented; the equality test of AudSfzVoiceStats as a loop
+
 
 ## 0.3.1 - 2026-10-14
 
@@ -316,6 +331,7 @@
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
 
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
+
 
 ## 0.1.0 - 2026-10-08
 

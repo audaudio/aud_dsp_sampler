@@ -12,9 +12,11 @@
 /// A string setting starts a load on a worker thread of the engine and
 /// returns its id; the node plays the old instrument until the new one is
 /// loaded and swaps them with a crossfade of 5 ms. [sfzVirtualPath] starts
-/// no load: it names the path the samples of the next [sfzText] resolve
-/// against. An empty [sfzText] or [sfzFile] unloads the instrument, as
-/// does one without regions, e.g. a text with only a comment.
+/// no load: it names the path the samples and the `#include`s of the next
+/// [sfzText] resolve against. An empty [sfzText] or [sfzFile] unloads the
+/// instrument, as does one without regions, e.g. a text with only a
+/// comment. A load fails when it cannot read a file the instrument
+/// includes; its message names the file.
 ///
 /// Messages to the node reach sfizz's message API (osc-001):
 /// `/graph/<g>/node/<n>/msg/region0/ampeg_attack f 0.1` becomes sfizz's
@@ -79,7 +81,8 @@ abstract final class AudSfzSampler {
   /// document.
   static const String sfzFile = 'sfz_file';
 
-  /// The path the samples of the next [sfzText] resolve against.
+  /// The path the samples and the `#include`s of the next [sfzText] resolve
+  /// against.
   static const String sfzVirtualPath = 'sfz_virtual_path';
 
   /// Loads SFZ text relative to [sfzVirtualPath].

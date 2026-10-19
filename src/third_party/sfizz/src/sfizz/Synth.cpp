@@ -27,6 +27,12 @@
 // once it was asked for: its clock reads cost a note-on a quarter of its
 // time; the stages of a voice are no longer timed, and the breakdown no
 // longer adds their durations, which stay 0.
+// Ticket 31: a load fails when an #include names a file it cannot read, even
+// when other regions loaded, and names the file relative to the folder of
+// the SFZ file, like the samples (getMissingIncludes()). The control opcode
+// note_offset_open_bounds keeps the outer keys under note_offset and
+// octave_offset: a region that reached key 0 or 127 before the offset still
+// reaches it.
 
 #include "SynthPrivate.h"
 #include "VirtualFile.h"
@@ -219,7 +225,7 @@ void Synth::Impl::buildRegion(const std::vector<Opcode>& regionOpcodes)
             ModKey::createNXYZ(ModId::MasterAmplitude, lastRegion->id)).sourceDepth = 1.0f;
 
     if (octaveOffset_ != 0 || noteOffset_ != 0)
-        lastRegion->offsetAllKeys(octaveOffset_ * 12 + noteOffset_);
+        lastRegion->offsetAllKeys(octaveOffset_ * 12 + noteOffset_, noteOffsetOpenBounds_);
 
     if (lastRegion->lastKeyswitch)
         lastKeyswitchLists_[*lastRegion->lastKeyswitch].push_back(lastLayer);
@@ -294,6 +300,7 @@ void Synth::Impl::clear()
     MidiState& midiState = resources_.getMidiState();
     missingSamples_.clear();
     parseErrors_.clear();
+    missingIncludes_.clear();
     effectFactory_.clearUnsupportedTypes();
 
     voiceManager_.reset();
@@ -319,6 +326,7 @@ void Synth::Impl::clear()
     numOutputs_ = 1;
     noteOffset_ = 0;
     octaveOffset_ = 0;
+    noteOffsetOpenBounds_ = Default::noteOffsetOpenBounds;
     currentSwitch_ = absl::nullopt;
     defaultPath_ = "";
     image_ = "";
@@ -468,6 +476,9 @@ void Synth::Impl::handleControlOpcodes(const std::vector<Opcode>& members)
             break;
         case hash("octave_offset"):
             octaveOffset_ = member.read(Default::octaveOffset);
+            break;
+        case hash("note_offset_open_bounds"):
+            noteOffsetOpenBounds_ = member.read(Default::noteOffsetOpenBounds);
             break;
         case hash("hint_ram_based"):
         {
@@ -660,6 +671,19 @@ void Synth::Impl::prepareSfzLoad(const fs::path& path)
     }
 }
 
+// The includes the parser could not read, relative to the folder of the
+// root file like the samples, e.g. "../common.sfz", or whole when they lie
+// below another root (aud_dsp_sampler, ticket 31).
+static std::vector<std::string> missingIncludesOf(const Parser& parser)
+{
+    std::vector<std::string> includes;
+    for (const std::string& include : parser.getMissingIncludes()) {
+        const fs::path relative = fs::path(include).lexically_relative(parser.originalDirectory());
+        includes.push_back(relative.empty() ? include : relative.string());
+    }
+    return includes;
+}
+
 bool Synth::loadSfzFile(const fs::path& file)
 {
     Impl& impl = *impl_;
@@ -677,6 +701,11 @@ bool Synth::loadSfzFile(const fs::path& file)
     // permissive parsing for compatibility
     if (!loaderParsesPermissively)
         success = parser.getErrorCount() == 0;
+
+    // A missing include fails the load, unlike other errors of the parser:
+    // the instrument would lack what it includes (aud_dsp_sampler, ticket 31).
+    impl.missingIncludes_ = missingIncludesOf(parser);
+    success = success && impl.missingIncludes_.empty();
 
     // An instrument without regions loads, unless the parser reported an
     // error, e.g. a file it cannot read (aud_dsp_sampler, ticket 27).
@@ -706,6 +735,10 @@ bool Synth::loadSfzString(const fs::path& path, absl::string_view text)
     // permissive parsing for compatibility
     if (!loaderParsesPermissively)
         success = parser.getErrorCount() == 0;
+
+    // A missing include fails the load (aud_dsp_sampler, ticket 31).
+    impl.missingIncludes_ = missingIncludesOf(parser);
+    success = success && impl.missingIncludes_.empty();
 
     // An instrument without regions loads, unless the parser reported an
     // error, e.g. a file it cannot read (aud_dsp_sampler, ticket 27).
@@ -1775,6 +1808,11 @@ const std::vector<std::string>& Synth::getMissingSamples() const noexcept
 const std::vector<std::string>& Synth::getParseErrors() const noexcept
 {
     return impl_->parseErrors_;
+}
+
+const std::vector<std::string>& Synth::getMissingIncludes() const noexcept
+{
+    return impl_->missingIncludes_;
 }
 
 const std::vector<std::string>& Synth::getUnsupportedEffects() const noexcept

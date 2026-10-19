@@ -16,12 +16,14 @@
 // bend, the pressure and the program of the old one. A newer load cancels
 // one that runs; a load that fails keeps the instrument that plays. A load
 // fails when sfizz cannot parse the instrument (the message names the first
-// error), when none of its samples can be read, or with AUD_ERROR_CAPACITY
-// when the heads of its samples alone exceed the sample cache budget. A load
-// that ends well names the samples it could not read and the effect types
-// sfizz does not know, which pass the signal through. On Android a path
-// "apk:/<path>" names an asset of the APK (ticket 27), read in place; the
-// includes and samples of such an SFZ file resolve inside the APK too.
+// error), when it cannot read a file the instrument includes (the message
+// names the file, ticket 31), when none of its samples can be read, or with
+// AUD_ERROR_CAPACITY when the heads of its samples alone exceed the sample
+// cache budget. A load that ends well names the samples it could not read
+// and the effect types sfizz does not know, which pass the signal through.
+// On Android a path "apk:/<path>" names an asset of the APK (ticket 27),
+// read in place; the includes and samples of such an SFZ file resolve inside
+// the APK too.
 //
 // The samples live in one store per process that every node of every engine
 // shares: the head of every sample (8192 frames), pinned while an instrument
@@ -118,8 +120,8 @@ typedef struct AudSfzVoiceStats {
 enum {
   // "sfz_file": loads an SFZ file; the value is its path.
   AUD_SFZ_KEY_FILE = 0,
-  // "sfz_virtual_path": the path the samples of the next SFZ text resolve
-  // against; it starts no load of its own and returns AUD_OK.
+  // "sfz_virtual_path": the path the samples and includes of the next SFZ
+  // text resolve against; it starts no load of its own and returns AUD_OK.
   AUD_SFZ_KEY_VIRTUAL_PATH = 1,
   // "sfz_text": loads SFZ text relative to the virtual path; an empty text
   // or file unloads the instrument.

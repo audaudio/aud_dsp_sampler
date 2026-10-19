@@ -3,6 +3,8 @@
 // time of the file pool's garbage collection is gone with it. A load removes
 // the layers it drops from every list that points at them.
 // Ticket 30: the callback breakdown is timed only once it was asked for.
+// Ticket 31: the synth keeps the includes its last load could not read, and
+// whether note_offset keeps the outer keys of the regions.
 
 #pragma once
 
@@ -355,6 +357,9 @@ struct Synth::Impl final: public Parser::Listener {
     // ticket 25).
     std::vector<std::string> missingSamples_;
     std::vector<std::string> parseErrors_;
+    // The files of the #include directives the last load could not read
+    // (aud_dsp_sampler, ticket 31).
+    std::vector<std::string> missingIncludes_;
 
     // Control opcodes
     std::string defaultPath_ { "" };
@@ -362,6 +367,9 @@ struct Synth::Impl final: public Parser::Listener {
     std::string image_controls_ { "" };
     int noteOffset_ { Default::noteOffset };
     int octaveOffset_ { Default::octaveOffset };
+    // note_offset_open_bounds: a region that reached key 0 or 127 before
+    // the offset still reaches it (aud_dsp_sampler, ticket 31).
+    bool noteOffsetOpenBounds_ { Default::noteOffsetOpenBounds };
 
     // Modulation source generators
     std::unique_ptr<ControllerSource> genController_;

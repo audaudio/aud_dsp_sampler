@@ -31,6 +31,12 @@ Teil der Audanika Audio Engine; geplant in [aud_audio_pm](https://github.com/aud
 - Auf dem Audio-Thread wird nichts alloziert (interop-001); die nativen
   Tests lassen den Knoten unter dem Watchdog der Engine, dem
   RealtimeSanitizer und dem ThreadSanitizer laufen
+- Presets, die ein Sample-Set teilen: Sie binden seine Regionen mit
+  `#include`, `$`-Variablen und `default_path` ein und transponieren es mit
+  `note_offset`, aus Dateien, den Assets einer APK und SFZ-Text
+  gleichermaßen; ein fehlendes Include lässt den Ladevorgang scheitern, und
+  `note_offset_open_bounds` hält die äußeren Tasten eines transponierten
+  Sets offen (Ticket 31)
 - Die Message-API von sfizz auf den Routen des Knotens, beantwortet über
   die Engine (osc-002)
 - Eine App, die den Sampler nicht nutzt, wird ohne seine native
@@ -65,6 +71,8 @@ entfällt ohne eines.
   mit dem Stimmenlimit, dem Stimmenbudget und dem Stehlen
 - [Der Plan von Ticket 30](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-30-render-the-sampler-voices-faster-on-the-big-cores.md)
   mit der schnelleren Stimmenschleife und ihren Messungen
+- [Der Plan von Ticket 32](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-14-32-share-sample-sets-between-sfz-presets.md)
+  mit den Sample-Sets, die Presets teilen, umgesetzt in Ticket 31
 - Die Entscheidungen hinter dem Paket:
   - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
     sfizz, geforkt, als Kern des Samplers
@@ -236,6 +244,69 @@ graph.setString(
   sodass Presets in verschiedenen Ordnern, die ein Sample über verschiedene
   relative Pfade erreichen, es teilen.
 
+## Ein Sample-Set zwischen Presets teilen
+
+Ein Sample-Set - seine Samples mit ihren Tasten, Grundtönen und
+Loop-Punkten - kann einmal existieren, und jedes Preset, das es spielt,
+bindet seine Regionen ein, statt sie zu kopieren (Ticket 31). Ein
+korrigierter Loop-Punkt erreicht dann jedes Preset:
+
+```text
+common/engine.sfz              Blöcke, die jedes Preset teilt, z. B. Kurven
+samplesets/piano/regions.sfz   nur die <region>-Zeilen des Sets
+samplesets/piano/samples/      060.flac, 072.flac, ...
+presets/piano-up/main.sfz      ein Preset des Sets, siehe unten
+```
+
+```sfz
+#define $SET piano
+#include "../../common/engine.sfz"
+
+<control>
+default_path=../../samplesets/$SET/
+// Um +12 transponiert: Taste n spielt den Klang von n + 12.
+note_offset=-12
+// Die Tasten 116 bis 127 spielen die höchste Region weiter.
+note_offset_open_bounds=on
+
+<group> ampeg_release=0.3
+#include "../../samplesets/$SET/regions.sfz"
+```
+
+- sfizz löst ein `#include` gegen den Ordner der Wurzel-SFZ-Datei auf, auch
+  in einer Datei, die selbst eingebunden ist. `$`-Variablen aus `#define`
+  werden in Include-Pfaden und in Opcode-Werten ersetzt.
+- Ein Sample löst sich gegen den Ordner der Wurzeldatei und den
+  `default_path` des letzten `<control>` auf, auch in den Regionen einer
+  eingebundenen Datei. Jedes `<control>` setzt `default_path` zurück: Das
+  `<control>` mit `default_path` folgt auf Includes, die ein eigenes
+  `<control>` mitbringen.
+- Dateien, `apk:/`-Assets und ein `sfz_text` mit seinem `sfz_virtual_path`
+  lösen ihre Includes gleich auf.
+- Ein Include, das sich nicht lesen lässt, lässt den Ladevorgang mit
+  `AUD_ERROR_FAILED` scheitern, und die Nachricht nennt es relativ zum
+  Ordner der SFZ-Datei, wie ein Sample: `sfizz could not read 1 include:
+  ../../samplesets/piano/regions.sfz`. Der Name des Ladevorgangs enthält
+  die SFZ-Datei. Vor 0.3.4 endete ein solcher Ladevorgang erfolgreich,
+  solange andere Regionen luden.
+- FLAC-Samples spielen wie WAV-Dateien derselben Frames; der Loop kommt
+  aus `loop_start` und `loop_end` oder aus einem `smpl`-Chunk, den
+  `flac --keep-foreign-metadata` aus einer WAV-Datei übernommen hat.
+
+`note_offset_open_bounds` ist ein Opcode von `<control>`, den dieser Fork
+hinzufügt: `on` oder `off` (auch `1` oder `0`), standardmäßig `off`.
+`note_offset` und `octave_offset` verschieben die Tasten jeder Region und
+begrenzen sie auf 0 bis 127: Um -12 verschoben endet die höchste Region bei
+Taste 115, und die Tasten 116 bis 127 verstummen; um +12 verschoben
+verstummen die Tasten 0 bis 11. Mit `note_offset_open_bounds=on` beginnt
+eine Region, deren Tastenbereich vor der Verschiebung bei Taste 0 begann,
+weiterhin dort, und eine, die bei Taste 127 endete, endet weiterhin dort;
+ihre neuen Tasten spielen in der Tonhöhe, die ihr Grundton und
+`pitch_keytrack` ergeben, wie ihre anderen Tasten. Eine Region ohne
+Tastenbereich behält in jedem Fall alle Tasten. Der Opcode gilt für die
+Regionen, die ihm folgen, bis zum nächsten Ladevorgang. Ohne ihn ändert
+sich nichts.
+
 ## Funktionsweise
 
 ### Der Knoten
@@ -310,9 +381,9 @@ graph.setString(
   Worker-Thread der Engine und geben sofort seine ID zurück; eine leere
   Datei oder ein leerer Text entlädt das Instrument, ebenso eines ohne
   Regionen, z. B. ein Text mit nur einem Kommentar. `sfz_virtual_path`
-  nennt den Pfad, gegen den die Samples des nächsten Texts aufgelöst
-  werden; `scala_file` und `scala_text` laden eine Stimmung mit dem
-  Instrument.
+  nennt den Pfad, gegen den die Samples und `#include`s des nächsten Texts
+  aufgelöst werden; `scala_file` und `scala_text` laden eine Stimmung mit
+  dem Instrument.
 - Der Ladevorgang füllt einen Standby-Synth, der wie der spielende
   konfiguriert ist. Der Audio-Thread übernimmt ihn an einem Blockanfang
   und blendet den alten Synth über 5 ms aus; der neue Synth startet ohne
@@ -322,12 +393,13 @@ graph.setString(
 - Ein neuerer Ladevorgang bricht einen laufenden ab; ein fehlgeschlagener
   behält das spielende Instrument. Ein Ladevorgang schlägt fehl, wenn sfizz
   das Instrument nicht lesen kann oder darin Fehler und keine Region
-  findet (die Nachricht zitiert den ersten Fehler), wenn es keines seiner
-  Samples lesen kann, oder mit
-  `AUD_ERROR_CAPACITY`, wenn schon die Köpfe seiner Samples das
-  Sample-Cache-Budget überschreiten. Ein erfolgreicher Ladevorgang nennt
-  die Samples, die er nicht lesen konnte, und die Effekttypen, die sfizz
-  nicht kennt und die das Signal durchreichen.
+  findet (die Nachricht zitiert den ersten Fehler), wenn es eine Datei
+  nicht lesen kann, die das Instrument einbindet (die Nachricht nennt sie),
+  wenn es keines seiner Samples lesen kann, oder mit `AUD_ERROR_CAPACITY`,
+  wenn schon die Köpfe seiner Samples das Sample-Cache-Budget
+  überschreiten. Ein erfolgreicher Ladevorgang nennt die Samples, die er
+  nicht lesen konnte, und die Effekttypen, die sfizz nicht kennt und die
+  das Signal durchreichen.
 - Vor dem ersten Instrument fährt der Knoten die Lautstärke als Rampe und
   merkt sich die Controller dafür. Keine Exception überquert die C-ABI:
   Ein Ladevorgang, dem der Arbeitsspeicher ausgeht, endet mit
@@ -417,6 +489,12 @@ graph.setString(
   ruhenden Effekte; eine Stimme rechnet ihre Tonhöhe und ihre
   Lautstärkemodulation einmal pro Folge gleicher Werte um. `NOTICES.md`
   listet die geänderten Dateien.
+- Presets teilen Sample-Sets (Ticket 31): Der Parser nennt die
+  `#include`-Dateien, die er nicht lesen kann, der Synth lässt einen
+  solchen Ladevorgang scheitern und nennt sie, und `<control>` nimmt
+  `note_offset_open_bounds`, das die äußeren Tasten der Regionen unter
+  `note_offset` und `octave_offset` offen hält. Ohne den Opcode rendern die
+  Goldens Bit für Bit gleich. `NOTICES.md` listet die geänderten Dateien.
 - Die Bibliothek baut für jedes ABI von Android, auch für das 32-Bit-ABI
   `armeabi-v7a`, auf dem Abseils 128-Bit-Ganzzahl keinen Compilertyp hat
   und `int128.cc` braucht. Auf Android linkt sie mit `--no-undefined`: Ein
@@ -477,6 +555,17 @@ node scripts/test-native.js
   über Graphen - auch während zwei Threads rendern und ein dritter das
   Budget setzt -, die Reserve, Offline-Renders, und dass ein Knoten, der
   geht, keine Stimmen in den Zählern hinterlässt.
+- Die Tests von Ticket 31 (`test/native/aud_sfz_sample_set_test.cpp`)
+  laden Presets, die ein Sample-Set einbinden - aus Dateien, aus einem
+  Ordner, der als Assets einer APK dient, und als SFZ-Text mit einem
+  virtuellen Pfad von beidem - und prüfen Includes relativ zur
+  Wurzeldatei, `$`-Variablen in Include-Pfaden und Opcode-Werten,
+  `default_path` nach einem Include und sein Zurücksetzen durch ein
+  zweites `<control>`, `note_offset` von -12 und +12 mit und ohne
+  `note_offset_open_bounds` und die Nachricht eines fehlenden Includes.
+  FLAC-Samples, die der Test mit ihrem Loop in der SFZ-Datei oder in einem
+  `smpl`-Chunk schreibt, rendern wie das WAV ihrer Frames.
+  `sfizz_synth_test.cpp` prüft die Tastenbereiche, die der Opcode lässt.
 - `--bench` baut den Mikro-Benchmark `test/native/bench/sfizz_bench.cpp`
   mit -O3 mit dem Fork von Release 0.3.2 (`AUD_BENCH_BASE` nennt eine
   andere Git-Ref) und mit dem Fork von jetzt, gibt aus, was das Leeren des

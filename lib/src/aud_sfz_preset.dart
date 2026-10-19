@@ -66,13 +66,14 @@ abstract final class AudSfzPreset {
     scalaText: scalaText,
   );
 
-  /// A preset that loads the SFZ [text] whose samples resolve against
-  /// [virtualPath], e.g. the path the text would have as a file. A parameter
-  /// left out keeps the default of the node; giving both [scalaFile] and
-  /// [scalaText] throws an [ArgumentError].
+  /// A preset that loads the SFZ [text] whose samples and `#include`s
+  /// resolve against [virtualPath], e.g. the path the text would have as a
+  /// file. A parameter left out keeps the default of the node; giving both
+  /// [scalaFile] and [scalaText] throws an [ArgumentError].
   ///
   /// - [text] the SFZ text of the instrument
-  /// - [virtualPath] the path the samples of [text] resolve against
+  /// - [virtualPath] the path the samples and the `#include`s of [text]
+  ///   resolve against
   /// - [name] the name of the preset
   /// - [volume] the output gain in dB, -60 to +6 ([AudSfzSampler.volume])
   /// - [polyphony] the voices, 1 to 256 ([AudSfzSampler.polyphony])

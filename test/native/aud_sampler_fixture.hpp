@@ -141,6 +141,131 @@ inline void writeClaimingWav(const std::string& file, const std::vector<float>& 
   out.write(reinterpret_cast<const char*>(&claimedBytes), 4);
 }
 
+// The samples as 16-bit integers would carry them, as floats: what a FLAC
+// file of 16 bits written from `samples` decodes to.
+inline std::vector<float> quantized16(const std::vector<float>& samples) {
+  std::vector<float> result(samples.size());
+  for (size_t i = 0; i < samples.size(); ++i) {
+    const long value = std::lround(static_cast<double>(samples[i]) * 32768.0);
+    result[i] = static_cast<float>(std::max(-32768L, std::min(32767L, value))) / 32768.0f;
+  }
+  return result;
+}
+
+// Writes a mono FLAC file of 16 bits (ticket 31): a STREAMINFO block, then
+// frames of 4096 samples, each with a verbatim subframe and the CRCs that
+// dr_flac checks. With `loopEnd` above 0 a smpl chunk with the loop from
+// `loopStart` to `loopEnd` (frames, both inclusive) follows in an
+// APPLICATION block "riff", the way `flac --keep-foreign-metadata` keeps
+// the chunks of a WAV file. The samples decode to quantized16(samples).
+inline void writeFlac(const std::string& file, const std::vector<float>& samples,
+                      uint32_t rate = 48000, uint32_t loopStart = 0, uint32_t loopEnd = 0) {
+  constexpr uint32_t kBlock = 4096;
+  struct Bits {
+    std::vector<uint8_t> bytes;
+    int used = 8;  // bits used in the last byte
+    void put(uint64_t value, int count) {
+      for (int i = count - 1; i >= 0; --i) {
+        if (used == 8) {
+          bytes.push_back(0);
+          used = 0;
+        }
+        if ((value >> i) & 1) bytes.back() |= static_cast<uint8_t>(0x80 >> used);
+        used += 1;
+      }
+    }
+    void putLittleEndian(uint32_t value) {
+      for (int i = 0; i < 4; ++i) put((value >> (8 * i)) & 0xff, 8);
+    }
+    void align() { used = 8; }
+  };
+  // The CRCs of FLAC, of the bytes from `from` on, the most significant bit
+  // first: CRC-8 with the polynomial 0x07, CRC-16 with 0x8005.
+  const auto crc = [](const std::vector<uint8_t>& bytes, size_t from, int width,
+                      uint32_t polynomial) {
+    const uint32_t top = 1u << (width - 1);
+    const uint32_t mask = (width == 32) ? 0xffffffffu : ((1u << width) - 1);
+    uint32_t value = 0;
+    for (size_t i = from; i < bytes.size(); ++i) {
+      value ^= static_cast<uint32_t>(bytes[i]) << (width - 8);
+      for (int bit = 0; bit < 8; ++bit) {
+        value = (value & top) ? ((value << 1) ^ polynomial) : (value << 1);
+        value &= mask;
+      }
+    }
+    return value;
+  };
+  std::vector<int16_t> values(samples.size());
+  const std::vector<float> decoded = quantized16(samples);
+  for (size_t i = 0; i < samples.size(); ++i) {
+    values[i] = static_cast<int16_t>(std::lround(decoded[i] * 32768.0f));
+  }
+  const bool loop = loopEnd > 0;
+  Bits out;
+  for (char c : std::string("fLaC")) out.put(static_cast<uint8_t>(c), 8);
+  // STREAMINFO: block sizes, unknown frame sizes, the rate, one channel of
+  // 16 bits, the frames, no MD5.
+  out.put(loop ? 0 : 1, 1);
+  out.put(0, 7);
+  out.put(34, 24);
+  out.put(kBlock, 16);
+  out.put(kBlock, 16);
+  out.put(0, 24);
+  out.put(0, 24);
+  out.put(rate, 20);
+  out.put(0, 3);
+  out.put(15, 5);
+  out.put(samples.size(), 36);
+  for (int i = 0; i < 16; ++i) out.put(0, 8);
+  if (loop) {
+    // APPLICATION "riff" with a smpl chunk of one forward loop.
+    constexpr uint32_t kSmplBytes = 36 + 24;
+    out.put(1, 1);
+    out.put(2, 7);
+    out.put(4 + 8 + kSmplBytes, 24);
+    for (char c : std::string("riffsmpl")) out.put(static_cast<uint8_t>(c), 8);
+    out.putLittleEndian(kSmplBytes);
+    const uint32_t smpl[15] = {0, 0, 1000000000u / rate, 60, 0, 0, 0, 1, 0,
+                               0, 0, loopStart, loopEnd, 0, 0};
+    for (uint32_t word : smpl) out.putLittleEndian(word);
+  }
+  for (size_t first = 0, number = 0; first < values.size(); first += kBlock, ++number) {
+    const size_t start = out.bytes.size();
+    const uint32_t count = static_cast<uint32_t>(std::min<size_t>(kBlock, values.size() - first));
+    // The header: sync code, fixed blocks, the size at its end, the rate of
+    // STREAMINFO, mono, 16 bits, the frame number coded like UTF-8.
+    out.put(0x3ffe, 14);
+    out.put(0, 2);
+    out.put(7, 4);
+    out.put(0, 4);
+    out.put(0, 4);
+    out.put(4, 3);
+    out.put(0, 1);
+    if (number < 0x80) {
+      out.put(number, 8);
+    } else if (number < 0x800) {
+      out.put(0xc0 | (number >> 6), 8);
+      out.put(0x80 | (number & 0x3f), 8);
+    } else {
+      out.put(0xe0 | (number >> 12), 8);
+      out.put(0x80 | ((number >> 6) & 0x3f), 8);
+      out.put(0x80 | (number & 0x3f), 8);
+    }
+    out.put(count - 1, 16);
+    out.put(crc(out.bytes, start, 8, 0x07), 8);
+    // A verbatim subframe without wasted bits.
+    out.put(0, 1);
+    out.put(1, 6);
+    out.put(0, 1);
+    for (uint32_t i = 0; i < count; ++i) out.put(static_cast<uint16_t>(values[first + i]), 16);
+    out.align();
+    out.put(crc(out.bytes, start, 16, 0x8005), 16);
+  }
+  std::ofstream stream(file, std::ios::binary);
+  stream.write(reinterpret_cast<const char*>(out.bytes.data()),
+               static_cast<std::streamsize>(out.bytes.size()));
+}
+
 inline void writeText(const std::string& file, const std::string& text) {
   std::ofstream out(file, std::ios::binary);
   out << text;

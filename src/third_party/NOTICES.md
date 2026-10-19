@@ -201,3 +201,25 @@ off_time are unchanged; the goldens of the package render as before.
   voice is no attack voice that lets a release trigger start.
 - `sfizz/src/sfizz/Synth.h`, `Synth.cpp`: `countVoices()` and
   `stealVoices()` for the host, through the voice manager.
+
+## Presets that share a sample set
+
+Changed for ticket 31, so that presets include the regions of a sample set
+instead of copying them: a missing include fails the load instead of
+leaving an instrument without the regions it includes, and a transposed
+set keeps its outer keys when the preset asks for it. Without the new
+opcode sfizz loads and renders as before; the goldens of the package
+render the same bit for bit.
+
+- `sfizz/src/sfizz/parser/Parser.h`, `Parser.cpp`: `getMissingIncludes()`
+  names the files of the `#include` directives the parser could not read,
+  lexically normal; their errors name them so too.
+- `sfizz/src/sfizz/Synth.h`, `Synth.cpp`, `SynthPrivate.h`: a load with a
+  missing include fails, even when other regions loaded, and
+  `getMissingIncludes()` names the includes relative to the folder of the
+  SFZ file, like the samples. `<control>` takes `note_offset_open_bounds`.
+- `sfizz/src/sfizz/Region.h`, `Region.cpp`: `offsetAllKeys()` keeps a key
+  range that started at key 0 or ended at key 127 open at that end when
+  `note_offset_open_bounds` is on.
+- `sfizz/src/sfizz/Defaults.h`, `Defaults.cpp`: the spec of
+  `note_offset_open_bounds`, off by default.

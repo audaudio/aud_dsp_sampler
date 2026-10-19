@@ -28,6 +28,11 @@ Part of the Audanika Audio Engine; planned in [aud_audio_pm](https://github.com/
 - Nothing allocates on the audio thread (interop-001); the native tests
   run the node under the engine's watchdog, the RealtimeSanitizer and the
   ThreadSanitizer
+- Presets that share a sample set: they include its regions with
+  `#include`, `$` variables and `default_path`, transpose it with
+  `note_offset`, from files, the assets of an APK and SFZ text alike; a
+  missing include fails the load, and `note_offset_open_bounds` keeps the
+  outer keys of a transposed set (ticket 31)
 - sfizz's message API on the routes of the node, answered through the
   engine (osc-002)
 - An app that does not use the sampler ships without its native library
@@ -62,6 +67,8 @@ one.
   with the voice limit, the voice budget and the stealing
 - [The plan of ticket 30](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-30-render-the-sampler-voices-faster-on-the-big-cores.md)
   with the faster voice loop and its measurements
+- [The plan of ticket 32](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-14-32-share-sample-sets-between-sfz-presets.md)
+  with the sample sets that presets share, done in ticket 31
 - The decisions behind the package:
   - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
     sfizz, forked, as the core of the sampler
@@ -231,6 +238,66 @@ graph.setString(
   different folders that reach one sample through different relative paths
   share it.
 
+## Share a sample set between presets
+
+A sample set - its samples with their keys, roots and loop points - can
+exist once, and every preset that plays it includes its regions instead of
+copying them (ticket 31). A fixed loop point then reaches every preset:
+
+```text
+common/engine.sfz              blocks every preset shares, e.g. curves
+samplesets/piano/regions.sfz   only the <region> lines of the set
+samplesets/piano/samples/      060.flac, 072.flac, ...
+presets/piano-up/main.sfz      a preset of the set, see below
+```
+
+```sfz
+#define $SET piano
+#include "../../common/engine.sfz"
+
+<control>
+default_path=../../samplesets/$SET/
+// Transposed by +12: key n plays the sound of n + 12.
+note_offset=-12
+// Keys 116 to 127 play the highest region on.
+note_offset_open_bounds=on
+
+<group> ampeg_release=0.3
+#include "../../samplesets/$SET/regions.sfz"
+```
+
+- sfizz resolves an `#include` against the folder of the root SFZ file,
+  also inside a file that is itself included. `$` variables of `#define`
+  expand in include paths and in opcode values.
+- A sample resolves against the folder of the root file and the
+  `default_path` of the last `<control>`, also in the regions of an
+  included file. Every `<control>` sets `default_path` back to none: the
+  `<control>` with `default_path` follows includes that bring a
+  `<control>` of their own.
+- Files, `apk:/` assets and an `sfz_text` with its `sfz_virtual_path`
+  resolve their includes alike.
+- An include that cannot be read fails the load with `AUD_ERROR_FAILED`
+  and a message that names it relative to the folder of the SFZ file, like
+  a sample: `sfizz could not read 1 include:
+  ../../samplesets/piano/regions.sfz`. The name of the load holds the SFZ
+  file. Before 0.3.4 such a load ended well as long as other regions
+  loaded.
+- FLAC samples play like WAV files of the same frames; the loop comes from
+  `loop_start` and `loop_end`, or from a `smpl` chunk that
+  `flac --keep-foreign-metadata` kept from a WAV file.
+
+`note_offset_open_bounds` is an opcode of `<control>` that this fork adds:
+`on` or `off` (also `1` or `0`), `off` by default. `note_offset` and
+`octave_offset` shift the keys of every region and clamp them to 0 to 127:
+shifted by -12, the highest region ends at key 115 and keys 116 to 127 fall
+silent; shifted by +12, keys 0 to 11 do. With `note_offset_open_bounds=on`
+a region whose key range started at key 0 before the shift still starts
+there, and one that ended at key 127 still ends there; its new keys play at
+the pitch its key center and `pitch_keytrack` give, like its other keys.
+A region without a key range keeps all keys either way. The opcode holds
+for the regions that follow it, until the next load. Without it nothing
+changes.
+
 ## How It Works
 
 ### The node
@@ -299,8 +366,8 @@ graph.setString(
   and return its id at once; an empty file or text unloads the
   instrument, as does one without regions, e.g. a text with only a
   comment. `sfz_virtual_path` names the path the samples of the next
-  text resolve against; `scala_file` and `scala_text` load a tuning with
-  the instrument.
+  text and its `#include`s resolve against; `scala_file` and `scala_text`
+  load a tuning with the instrument.
 - The load fills a standby synth configured like the one that plays. The
   audio thread adopts it at a block start and fades the old synth out
   over 5 ms; the new synth starts without notes and takes over the
@@ -309,10 +376,11 @@ graph.setString(
 - A newer load cancels one that runs; a failed load keeps the instrument
   that plays. A load fails when sfizz cannot read the instrument, or
   finds errors and no region in it (the message quotes the first error),
-  when it can read none of its samples, or with `AUD_ERROR_CAPACITY` when
-  the heads of its samples alone exceed the sample cache budget. A load that
-  ends well names the samples it could not read and the effect types sfizz
-  does not know, which pass the signal through.
+  when it cannot read a file the instrument includes (the message names
+  it), when it can read none of its samples, or with `AUD_ERROR_CAPACITY`
+  when the heads of its samples alone exceed the sample cache budget. A
+  load that ends well names the samples it could not read and the effect
+  types sfizz does not know, which pass the signal through.
 - Before the first instrument the node ramps the volume and remembers the
   controllers for it. No exception crosses the C ABI: a load that runs out
   of memory ends with `AUD_ERROR_OUT_OF_MEMORY`. A host api that lacks a
@@ -393,6 +461,12 @@ graph.setString(
   bus whose input is silent skips its effects at rest; a voice converts its
   pitch and its volume modulation once per run of equal values.
   `NOTICES.md` lists the changed files.
+- Presets share sample sets (ticket 31): the parser names the `#include`
+  files it cannot read, the synth fails such a load and names them, and
+  `<control>` takes `note_offset_open_bounds`, which keeps the outer keys
+  of the regions under `note_offset` and `octave_offset`. Without the
+  opcode the goldens render the same bit for bit. `NOTICES.md` lists the
+  changed files.
 - The library builds for every ABI of Android, the 32-bit `armeabi-v7a`
   among them, where Abseil's 128-bit integer has no compiler type and
   needs `int128.cc`. On Android it links with `--no-undefined`: a symbol
@@ -448,6 +522,16 @@ node scripts/test-native.js
   also while two threads render and a third sets the budget -, the
   reserve, offline renders, and that a node that goes leaves no voices in
   the counts.
+- The tests of ticket 31 (`test/native/aud_sfz_sample_set_test.cpp`) load
+  presets that include a sample set - from files, from a folder served as
+  the assets of an APK, and as SFZ text with a virtual path of either - and
+  check includes relative to the root file, `$` variables in include paths
+  and opcode values, `default_path` after an include and its reset by a
+  second `<control>`, `note_offset` of -12 and +12 with and without
+  `note_offset_open_bounds`, and the message of a missing include. FLAC
+  samples, written by the test with their loop in the SFZ file or in a
+  `smpl` chunk, render the same as the WAV of their frames.
+  `sfizz_synth_test.cpp` checks the key ranges the opcode leaves.
 - `--bench` builds the micro-benchmark `test/native/bench/sfizz_bench.cpp`
   at -O3 with the fork of release 0.3.2 (`AUD_BENCH_BASE` names another
   git ref) and with the fork of now, prints what the flush of the MIDI

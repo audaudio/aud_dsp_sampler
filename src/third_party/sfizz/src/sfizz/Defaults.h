@@ -25,6 +25,7 @@
 
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
 // specs of the fverb opcodes are gone with the effect.
+// Ticket 31: the spec of note_offset_open_bounds.
 
 #pragma once
 #include <limits>
@@ -329,6 +330,7 @@ namespace Default
     extern const OpcodeSpec<int32_t> freewheelingOscillatorQuality;
     extern const OpcodeSpec<int32_t> octaveOffset;
     extern const OpcodeSpec<int32_t> noteOffset;
+    extern const OpcodeSpec<bool> noteOffsetOpenBounds;
     extern const OpcodeSpec<float> effect;
     extern const OpcodeSpec<float> effectPercent;
     extern const OpcodeSpec<LFOWave> apanWaveform;

@@ -16,6 +16,8 @@
 // Ticket 30: getCallbackBreakdown() starts the timing of the blocks and the
 // events, so that its first call returns zeros; the stages of a voice are
 // not timed.
+// Ticket 31: a load fails when an #include names a file it cannot read;
+// getMissingIncludes() names them.
 
 #pragma once
 #include "AudioSpan.h"
@@ -198,6 +200,13 @@ public:
      * config::maxParseErrors, e.g. "piano.sfz at line 3: ...".
      */
     const std::vector<std::string>& getParseErrors() const noexcept;
+    /**
+     * @brief The files of the #include directives the last load could not
+     * read, relative to the folder of the SFZ file like the samples, e.g.
+     * "../common.sfz", or whole below another root; a load with one fails,
+     * even when other regions loaded.
+     */
+    const std::vector<std::string>& getMissingIncludes() const noexcept;
     /**
      * @brief The effect types of the last load sfizz does not know, e.g.
      * "fverb"; their effects pass the signal through.

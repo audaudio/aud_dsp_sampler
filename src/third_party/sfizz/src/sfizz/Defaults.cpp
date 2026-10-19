@@ -1,5 +1,6 @@
 // Modified by Audanika for aud_dsp_sampler (ticket 25 of aud_audio_pm): the
 // specs of the fverb opcodes are gone with the effect.
+// Ticket 31: the spec of note_offset_open_bounds.
 
 #include "Defaults.h"
 
@@ -172,6 +173,7 @@ Int32Spec freewheelingSampleQuality { 10, {0, 10}, 0 };
 Int32Spec freewheelingOscillatorQuality { 3, {0, 3}, 0 };
 Int32Spec octaveOffset { 0, {-10, 10}, kPermissiveBounds };
 Int32Spec noteOffset { 0, {-127, 127}, kPermissiveBounds };
+BoolSpec noteOffsetOpenBounds { false, {0, 1}, kEnforceBounds };
 
 // TODO: effect opcode flags
 FloatSpec effect { 0.0f, {0.0f, 100.0f}, kNormalizePercent };
