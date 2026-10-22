@@ -13,27 +13,27 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      resolved-ref: "9af9be960f1c5f8b2d5ece40a7768c17b0cde17b"
+      resolved-ref: "09cde0a9a374743e08c19d5396841f3b96331d8a"
       tag-pattern: "{{version}}"
       url: "git@github.com:audaudio/aud_audio_core.git"
     source: git
-    version: "0.5.2"
+    version: "0.5.3"
   aud_audio_graph:
     dependency: "direct main"
     description:
       path: "."
-      resolved-ref: "66d46737d62b8cbaba5f800c6565cba61ca256e0"
+      resolved-ref: ca9f30481ff1c7898575f28563ceac7ad9fec3b2
       tag-pattern: "{{version}}"
       url: "git@github.com:audaudio/aud_audio_graph.git"
     source: git
-    version: "0.5.3"
+    version: "0.5.4"
   aud_dsp_sampler:
     dependency: "direct main"
     description:
       path: ".."
       relative: true
     source: path
-    version: "0.3.3"
+    version: "0.3.4"
   aud_midi_standard:
     dependency: "direct main"
     description:
