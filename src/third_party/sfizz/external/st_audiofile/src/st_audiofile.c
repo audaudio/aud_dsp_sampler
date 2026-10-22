@@ -184,14 +184,21 @@ static st_audio_file* st_generic_open_file(const void* filename, int widepath)
     {
 #if defined(_WIN32)
         // WavPack expects an UTF8 input and has no widechar api, so we convert the filename back...
-        unsigned wsize = wcslen(filename);
-        unsigned size = WideCharToMultiByte(CP_UTF8, 0, filename, wsize, NULL, 0, NULL, NULL);
-        char *buffer = (char*)malloc((size+1) * sizeof(char));
-        WideCharToMultiByte(CP_UTF8, 0, filename, wsize, buffer, size, NULL, NULL);
-        buffer[size] = '\0';
-        af->wv =
-            WavpackOpenFileInput(buffer, NULL, OPEN_FILE_UTF8, 0);
-        free(buffer);
+        // A narrow name is passed on as it is: wcslen on it read past its end
+        // (aud_dsp_sampler, ticket 38).
+        if (!widepath) {
+            af->wv =
+                WavpackOpenFileInput((const char*)filename, NULL, 0, 0);
+        } else {
+            unsigned wsize = (unsigned)wcslen((const wchar_t*)filename);
+            unsigned size = WideCharToMultiByte(CP_UTF8, 0, (const wchar_t*)filename, wsize, NULL, 0, NULL, NULL);
+            char *buffer = (char*)malloc((size+1) * sizeof(char));
+            WideCharToMultiByte(CP_UTF8, 0, (const wchar_t*)filename, wsize, buffer, size, NULL, NULL);
+            buffer[size] = '\0';
+            af->wv =
+                WavpackOpenFileInput(buffer, NULL, OPEN_FILE_UTF8, 0);
+            free(buffer);
+        }
 #else
         af->wv =
             WavpackOpenFileInput((const char*)filename, NULL, 0, 0);

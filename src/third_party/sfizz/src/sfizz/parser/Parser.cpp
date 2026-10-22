@@ -75,8 +75,11 @@ void Parser::parseVirtualFile(const fs::path& path, std::unique_ptr<Reader> read
 
 void Parser::includeNewFile(const fs::path& path, std::unique_ptr<Reader> reader, const SourceRange& includeStmtRange)
 {
+    // A path from the root, e.g. "/a/b.sfz", is no relative one on Windows
+    // either, where it lacks the drive to be absolute (ticket 38).
     fs::path fullPath =
-        (path.empty() || path.is_absolute() || VirtualFiles::isVirtual(path.string()))
+        (path.empty() || path.is_absolute() || path.has_root_directory() ||
+         VirtualFiles::isVirtual(path.string()))
         ? path : _originalDirectory / path;
 
     if (_pathsIncluded.empty())
@@ -107,7 +110,7 @@ void Parser::includeNewFile(const fs::path& path, std::unique_ptr<Reader> reader
     auto cannotRead = [&](const std::string& why) {
         const std::string normalPath = virtualFile
             ? VirtualFiles::normalized(fullPath.string())
-            : fullPath.lexically_normal().string();
+            : fullPath.lexically_normal().generic_string();
         if (includeStmtRange)
             _missingIncludes.push_back(normalPath);
         emitError(makeErrorRange(), why + normalPath);

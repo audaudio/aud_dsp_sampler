@@ -11,13 +11,10 @@
 //
 // The tests of the fork include it as gnu++14, the others as C++17: it uses
 // no type whose layout depends on the language version, e.g. no
-// std::filesystem, and paths are plain strings.
+// std::filesystem but ghc's in both, and paths are plain strings.
 
 #ifndef AUD_SAMPLER_FIXTURE_HPP
 #define AUD_SAMPLER_FIXTURE_HPP
-
-#include <ftw.h>
-#include <sys/stat.h>
 
 #include <algorithm>
 #include <atomic>
@@ -31,6 +28,7 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <system_error>
 #include <vector>
 
 #include "aud_audio_graph.h"
@@ -38,6 +36,7 @@
 
 #include "aud_dsp_sampler.h"
 #include "aud_test.hpp"
+#include "ghc/filesystem.hpp"
 
 // The sanitizer builds refuse allocations above 1 GB, the way a phone
 // refuses what does not fit, instead of reserving them: a header that claims
@@ -71,9 +70,6 @@ constexpr float kLevel = 0.0826f;
 // A folder of its own for every test, removed at the end. The start time of
 // the run tells runs apart, the counter the folders of one run.
 struct TempFolder {
-  // Folders nftw keeps open while it removes the folder.
-  static constexpr int kOpenFolders = 16;
-
   std::string path;
 
   TempFolder() {
@@ -83,31 +79,26 @@ struct TempFolder {
            std::to_string(next.fetch_add(1));
     createFolder("");
   }
-  ~TempFolder() { nftw(path.c_str(), removeEntry, kOpenFolders, FTW_DEPTH | FTW_PHYS); }
+  ~TempFolder() {
+    std::error_code ignored;
+    ghc::filesystem::remove_all(path, ignored);
+  }
 
   std::string file(const std::string& name) const { return path + "/" + name; }
 
   // Creates a folder inside, e.g. "instrument/samples", with the folders
   // above it.
   void createFolder(const std::string& name) const {
-    const std::string target = name.empty() ? path : file(name);
-    for (size_t slash = target.find('/', 1); slash != std::string::npos;
-         slash = target.find('/', slash + 1)) {
-      mkdir(target.substr(0, slash).c_str(), 0700);
-    }
-    mkdir(target.c_str(), 0700);
+    std::error_code ignored;
+    ghc::filesystem::create_directories(name.empty() ? path : file(name), ignored);
   }
 
-  // $TMPDIR, or /tmp without one.
+  // The temporary folder of the system with "/" between its parts: $TMPDIR,
+  // /tmp without one, %TEMP% on Windows.
   static std::string temporaryDirectory() {
-    const char* variable = std::getenv("TMPDIR");
-    std::string directory = variable != nullptr && *variable != '\0' ? variable : "/tmp";
+    std::string directory = ghc::filesystem::temp_directory_path().generic_string();
     while (directory.size() > 1 && directory.back() == '/') directory.pop_back();
     return directory;
-  }
-
-  static int removeEntry(const char* entry, const struct stat*, int, struct FTW*) {
-    return std::remove(entry);
   }
 };
 

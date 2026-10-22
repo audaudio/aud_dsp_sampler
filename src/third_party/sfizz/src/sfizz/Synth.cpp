@@ -679,7 +679,7 @@ static std::vector<std::string> missingIncludesOf(const Parser& parser)
     std::vector<std::string> includes;
     for (const std::string& include : parser.getMissingIncludes()) {
         const fs::path relative = fs::path(include).lexically_relative(parser.originalDirectory());
-        includes.push_back(relative.empty() ? include : relative.string());
+        includes.push_back(relative.empty() ? include : relative.generic_string());
     }
     return includes;
 }

@@ -38,9 +38,13 @@ void ResonantArrayAVX::setup(
         ResonantStringAVX& rs = stringPacks[p];
         rs.init(sampleRate);
 
-        __m256 pitchAVX = _mm256_set1_ps(0.0f);
-        __m256 bandwidthAVX = _mm256_set1_ps(0.0f);
-        __m256 feedbackAVX = _mm256_set1_ps(0.0f);
+        // The lanes without a string resonate like the first string of the
+        // pack and stay silent: a frequency and bandwidth of 0 made them
+        // NaN, which a gain of 0 keeps and the sum of the lanes spreads
+        // (aud_dsp_sampler, ticket 38).
+        __m256 pitchAVX = _mm256_set1_ps(pitches[p * avxVectorSize]);
+        __m256 bandwidthAVX = _mm256_set1_ps(bandwidths[p * avxVectorSize]);
+        __m256 feedbackAVX = _mm256_set1_ps(feedbacks[p * avxVectorSize]);
         __m256 gainAVX = _mm256_set1_ps(0.0f);
 
         // copy 8 string parameters, or less if not enough remaining in buffer

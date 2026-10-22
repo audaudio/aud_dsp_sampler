@@ -15,19 +15,23 @@
 #ifndef AUD_DIRECTORY_BACKEND_HPP
 #define AUD_DIRECTORY_BACKEND_HPP
 
-#include <dirent.h>
-#include <sys/stat.h>
-
 #include <cstdint>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "VirtualFile.h"
+// ghc's filesystem in every language version, not std::filesystem, so that
+// the inline functions read the same in both; the folders of every host,
+// Windows among them (ticket 38).
+#include "ghc/filesystem.hpp"
 
 namespace aud_sampler_test {
+
+namespace gfs = ghc::filesystem;
 
 // The bytes of a file of the host, loaded at once.
 class DirectoryFileData : public sfz::VirtualFileData {
@@ -54,9 +58,10 @@ class DirectoryBackend : public sfz::VirtualFileBackend {
   // every component of the path must be spelled as the folder has it.
   int64_t sizeOf(const std::string& path) override {
     if (!spelledAsStored(path)) return -1;
-    struct stat info {};
-    if (stat(fileOf(path).c_str(), &info) != 0 || !S_ISREG(info.st_mode)) return -1;
-    return static_cast<int64_t>(info.st_size);
+    std::error_code error;
+    if (!gfs::is_regular_file(fileOf(path), error)) return -1;
+    const auto size = gfs::file_size(fileOf(path), error);
+    return error ? -1 : static_cast<int64_t>(size);
   }
 
   std::unique_ptr<sfz::VirtualFileData> open(const std::string& path) override {
@@ -71,18 +76,13 @@ class DirectoryBackend : public sfz::VirtualFileBackend {
   std::vector<std::string> listFiles(const std::string& directory) override {
     std::vector<std::string> names;
     if (!spelledAsStored(directory)) return names;
-    DIR* dir = opendir(fileOf(directory).c_str());
-    if (dir == nullptr) return names;
-    for (dirent* entry = readdir(dir); entry != nullptr; entry = readdir(dir)) {
-      const std::string name = entry->d_name;
-      if (name == "." || name == "..") continue;
-      struct stat info {};
-      if (stat(fileOf(directory.empty() ? name : directory + "/" + name).c_str(), &info) == 0 &&
-          S_ISREG(info.st_mode)) {
-        names.push_back(name);
+    std::error_code error;
+    for (gfs::directory_iterator entry(fileOf(directory), error), end;
+         !error && entry != end; entry.increment(error)) {
+      if (entry->is_regular_file(error)) {
+        names.push_back(entry->path().filename().string());
       }
     }
-    closedir(dir);
     return names;
   }
 
@@ -108,14 +108,12 @@ class DirectoryBackend : public sfz::VirtualFileBackend {
   }
 
   static bool hasEntry(const std::string& folder, const std::string& name) {
-    DIR* dir = opendir(folder.c_str());
-    if (dir == nullptr) return false;
-    bool found = false;
-    for (dirent* entry = readdir(dir); entry != nullptr && !found; entry = readdir(dir)) {
-      found = name == entry->d_name;
+    std::error_code error;
+    for (gfs::directory_iterator entry(folder, error), end;
+         !error && entry != end; entry.increment(error)) {
+      if (entry->path().filename().string() == name) return true;
     }
-    closedir(dir);
-    return found;
+    return false;
   }
 
   std::string root_;
