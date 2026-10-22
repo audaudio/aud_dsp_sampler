@@ -5,6 +5,7 @@
 ### Changed
 
 - Build and test the sampler on Windows
+- Document the Windows support
 
 ## 0.3.5 - 2026-10-22
 
