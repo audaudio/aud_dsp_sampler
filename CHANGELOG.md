@@ -7,6 +7,11 @@
 - Build and test the sampler on Windows
 - Document the Windows support
 - Document the Windows behavior in both languages
+- Stop relinking the sampler on every Windows build
+
+Write the unique wrapper sources only when their content changes
+Date a new wrapper back to the source it includes
+Each build made a new library whose first load stalled Flutter for 11 s
 
 ## 0.3.5 - 2026-10-22
 

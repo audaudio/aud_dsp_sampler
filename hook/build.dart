@@ -135,14 +135,27 @@ Future<List<String>> uniqueObjectNames(
       outputDirectory.resolve('unique/${source.replaceAll('/', '_')}'),
     );
     await wrapper.parent.create(recursive: true);
-    final original = packageRoot
-        .resolve(source)
-        .toFilePath()
-        .replaceAll(r'\', '/');
-    await wrapper.writeAsString('#include "$original"\n');
+    final original = File.fromUri(packageRoot.resolve(source));
+    await writeIfChanged(
+      wrapper,
+      '#include "${original.path.replaceAll(r'\', '/')}"\n',
+      original,
+    );
     result.add(wrapper.path);
   }
   return result;
+}
+
+/// Writes [content] to [file] unless the file holds it already, and gives a
+/// new or changed [file] the modification time of [source]. hooks_runner
+/// takes a dependency modified while the hook runs for a changed one and
+/// reruns the hook on the next build: wrappers written on every run rebuilt
+/// and relinked all of sfizz on every build, a new library each time, whose
+/// first load in a Flutter app stalled for about 11 s (ticket 38).
+Future<void> writeIfChanged(File file, String content, File source) async {
+  if (await file.exists() && await file.readAsString() == content) return;
+  await file.writeAsString(content);
+  await file.setLastModified(await source.lastModified());
 }
 
 /// The `src` directory of [package], resolved through the package config.
