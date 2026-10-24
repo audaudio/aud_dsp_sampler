@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-10-24
 
 ### Changed
 
@@ -8,10 +8,6 @@
 - Document the Windows support
 - Document the Windows behavior in both languages
 - Stop relinking the sampler on every Windows build
-
-Write the unique wrapper sources only when their content changes
-Date a new wrapper back to the source it includes
-Each build made a new library whose first load stalled Flutter for 11 s
 
 ## 0.3.5 - 2026-10-22
 
@@ -40,7 +36,6 @@ Each build made a new library whose first load stalled Flutter for 11 s
 - The FLAC writer of the native tests in named steps: FlacBits with its CRC, STREAMINFO, the smpl loop, a frame; the files it writes stay byte for byte the same
 
 - kLevel and since() move into the test fixture; the sample set test builds its loop opcodes from kLoopStart and kLoopEnd and compares the paths the backend opened as whole lists
-
 
 ## 0.3.3 - 2026-10-15
 
@@ -132,7 +127,6 @@ Each build made a new library whose first load stalled Flutter for 11 s
 
 - The German README names the interpolation and the envelope
 
-
 ## 0.3.2 - 2026-10-14
 
 ### Added
@@ -178,7 +172,6 @@ Each build made a new library whose first load stalled Flutter for 11 s
 - The steps of max_voices from kNoVoiceLimit; a compile-time check that the voice counters take no lock
 
 - The parameters of stealVoices and fadeOutStolen documented; the equality test of AudSfzVoiceStats as a loop
-
 
 ## 0.3.1 - 2026-10-14
 
@@ -360,7 +353,6 @@ Each build made a new library whose first load stalled Flutter for 11 s
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
 
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
-
 
 ## 0.1.0 - 2026-10-08
 
