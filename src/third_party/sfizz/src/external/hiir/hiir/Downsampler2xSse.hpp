@@ -119,8 +119,13 @@ float	Downsampler2xSse <NC>::process_sample (const float in_ptr [2])
 {
 	assert (in_ptr != 0);
 
-	// Combines two input samples and two mid-processing data
-	const __m128   spl_in  = _mm_loadu_ps (in_ptr);
+	// Combines two input samples and two mid-processing data. Loads the two
+	// samples only: _mm_loadu_ps read two floats past the end of the last
+	// pair of a block (aud_dsp_sampler, ticket 38); the shuffle takes lanes
+	// 0 and 1 alone.
+	const __m128   spl_in  = _mm_loadl_pi (
+		_mm_setzero_ps (), reinterpret_cast <const __m64 *> (in_ptr)
+	);
 	const __m128   spl_mid = _mm_load_ps (_filter [NBR_STAGES]._mem);
 	__m128         y       = _mm_shuffle_ps (spl_in, spl_mid, 0x44);
 
@@ -204,8 +209,13 @@ void	Downsampler2xSse <NC>::process_sample_split (float &low, float &high, const
 {
 	assert (in_ptr != 0);
 
-	// Combines two input samples and two mid-processing data
-	const __m128   spl_in  = _mm_loadu_ps (in_ptr);
+	// Combines two input samples and two mid-processing data. Loads the two
+	// samples only: _mm_loadu_ps read two floats past the end of the last
+	// pair of a block (aud_dsp_sampler, ticket 38); the shuffle takes lanes
+	// 0 and 1 alone.
+	const __m128   spl_in  = _mm_loadl_pi (
+		_mm_setzero_ps (), reinterpret_cast <const __m64 *> (in_ptr)
+	);
 	const __m128   spl_mid = _mm_load_ps (_filter [NBR_STAGES]._mem);
 	__m128         y       = _mm_shuffle_ps (spl_in, spl_mid, 0x44);
 

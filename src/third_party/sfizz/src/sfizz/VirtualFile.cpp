@@ -53,19 +53,21 @@ size_t schemeLength(const std::string& path) noexcept
         ++i;
     if (i < 2 || i >= path.size() || path[i] != ':')
         return 0;
-    if (i + 1 < path.size() && path[i + 1] != '/')
+    // fs::path gives "apk:\x" back on Windows (ticket 38).
+    if (i + 1 < path.size() && path[i + 1] != '/' && path[i + 1] != '\\')
         return 0;
     return i;
 }
 
 // The components of `path` after the scheme, "." and ".." resolved: ".."
-// at the root stays at the root.
+// at the root stays at the root. "\" separates as "/" does: fs::path joins
+// with it on Windows, and no asset name holds it (ticket 38).
 std::vector<std::string> componentsOf(const std::string& path, size_t scheme)
 {
     std::vector<std::string> parts;
     size_t start = scheme + 1;
     while (start <= path.size()) {
-        size_t end = path.find('/', start);
+        size_t end = path.find_first_of("/\\", start);
         if (end == std::string::npos)
             end = path.size();
         const std::string part = path.substr(start, end - start);

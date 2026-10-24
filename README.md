@@ -93,6 +93,14 @@ one.
   [`src/third_party/NOTICES.md`](src/third_party/NOTICES.md)
 - The guides in [`doc/guides`](doc/guides)
 
+## Windows
+
+The build hook compiles sfizz with MSVC: its C units as C11 with atomics,
+its C++ units as C++14, with exceptions and `<cmath>` forced in for simde.
+The native tests run with the "C++ Clang compiler for Windows" of Visual
+Studio, with ASan and UBSan; Windows has neither TSan nor RTSan. The
+goldens come from arm64 and match within 1e-3 on Windows.
+
 ## Code Examples
 
 The sampler on the engine of `aud_audio` (`aud_audio_ffi.dart` on native

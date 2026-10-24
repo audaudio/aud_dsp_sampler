@@ -38,9 +38,13 @@ void ResonantArraySSE::setup(
         ResonantStringSSE& rs = stringPacks[p];
         rs.init(sampleRate);
 
-        __m128 pitchSSE = _mm_set1_ps(0.0f);
-        __m128 bandwidthSSE = _mm_set1_ps(0.0f);
-        __m128 feedbackSSE = _mm_set1_ps(0.0f);
+        // The lanes without a string resonate like the first string of the
+        // pack and stay silent: a frequency and bandwidth of 0 made them
+        // NaN, which a gain of 0 keeps and the sum of the lanes spreads
+        // (aud_dsp_sampler, ticket 38).
+        __m128 pitchSSE = _mm_set1_ps(pitches[p * sseVectorSize]);
+        __m128 bandwidthSSE = _mm_set1_ps(bandwidths[p * sseVectorSize]);
+        __m128 feedbackSSE = _mm_set1_ps(feedbacks[p * sseVectorSize]);
         __m128 gainSSE = _mm_set1_ps(0.0f);
 
         // copy 4 string parameters, or less if not enough remaining in buffer

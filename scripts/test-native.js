@@ -35,6 +35,43 @@ const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { fileURLToPath, pathToFileURL } = require('node:url');
+
+// On Windows, clang++ and the runtime of its sanitizers come from the LLVM
+// of Visual Studio (component "C++ Clang compiler for Windows"), and the
+// test binaries need the .exe suffix to start (ticket 38).
+const exe = process.platform === 'win32' ? '.exe' : '';
+if (process.platform === 'win32') useVisualStudioLlvm();
+
+function useVisualStudioLlvm() {
+  const vswhere = path.join(
+    process.env['ProgramFiles(x86)'] || 'C:/Program Files (x86)',
+    'Microsoft Visual Studio',
+    'Installer',
+    'vswhere.exe',
+  );
+  const found = spawnSync(
+    vswhere,
+    ['-latest', '-products', '*', '-find', 'VC/Tools/Llvm/x64/bin/clang++.exe'],
+    { encoding: 'utf8' },
+  );
+  const clang = found.status === 0 ? found.stdout.split(/\r?\n/)[0].trim() : '';
+  if (!clang) return;
+  const resourceDir = spawnSync(clang, ['-print-resource-dir'], {
+    encoding: 'utf8',
+  }).stdout.trim();
+  process.env.PATH = [
+    path.dirname(clang),
+    path.join(resourceDir, 'lib', 'windows'),
+    process.env.PATH,
+  ].join(path.delimiter);
+  // lld-link refuses the allocators that the watchdog and the test
+  // allocators replace next to those of the ASan runtime; MSVC's link.exe
+  // takes ours. Every clang call gets it, without an unused-argument warning
+  // when it only compiles.
+  process.env.CCC_OVERRIDE_OPTIONS =
+    '# +-fuse-ld=link +-Wno-unused-command-line-argument';
+}
 
 const root = path.resolve(__dirname, '..');
 
@@ -178,6 +215,8 @@ const sfizzDefines = [
   '-DNOMINMAX',
   '-DNDEBUG',
   '-DSFIZZ_ENABLE_RELEASE_ASSERT',
+  // M_PI and its kin in the C runtime of Windows (ticket 38).
+  ...(process.platform === 'win32' ? ['-D_USE_MATH_DEFINES'] : []),
 ];
 
 // The root directory of a package, resolved through the package config.
@@ -189,8 +228,8 @@ function packageRoot(name) {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   const entry = config.packages.find((p) => p.name === name);
   if (!entry) throw new Error(`Package ${name} is not in the package config`);
-  const rootUri = new URL(entry.rootUri, `file://${configPath}`);
-  return decodeURIComponent(rootUri.pathname);
+  const rootUri = new URL(entry.rootUri, pathToFileURL(configPath));
+  return fileURLToPath(rootUri);
 }
 
 function lines(file) {
@@ -237,7 +276,7 @@ function works(compiler, flags) {
     fs.writeFileSync(source, 'int main() { return 0; }\n');
     const build = spawnSync(
       compiler,
-      [...flags, source, '-o', path.join(dir, 'probe')],
+      [...flags, source, '-o', path.join(dir, `probe${exe}`)],
       { encoding: 'utf8' },
     );
     return build.status === 0;
@@ -369,6 +408,10 @@ async function compileAll(name, compiler, variantFlags, context) {
   ];
   // A build for another machine than this one names its architecture.
   if ((context.arch ?? process.arch) === 'x64') common.push('-mavx');
+  // simde needs <cmath> on Windows, see src/aud_windows_math.h.
+  if (process.platform === 'win32') {
+    common.push('-include', path.join(root, 'src', 'aud_windows_math.h'));
+  }
   const jobs = units(context).map(({ file, flags }) => {
     const all = [...common, ...flags];
     const hash = createHash('sha256');
@@ -415,20 +458,30 @@ async function build(name, compiler, variantFlags, context) {
   const outDir = outDirOf(name);
   const binary = path.join(
     outDir,
-    `aud_sampler_test-${hash.digest('hex').slice(0, 16)}`,
+    `aud_sampler_test-${hash.digest('hex').slice(0, 16)}${exe}`,
   );
   if (!fs.existsSync(binary)) {
     const flags = [...variantFlags, ...objects, '-o', binary];
+    // The sanitizers name the lines of a report from the PDB on Windows.
+    if (process.platform === 'win32') flags.push('-g');
     if (context.linkFlags) flags.push(...context.linkFlags);
     else if (process.platform !== 'win32') flags.push('-lpthread');
+    // CommandLineToArgvW of ghc::filesystem.
+    else flags.push('-lshell32');
     const result = spawnSync(compiler, flags, { encoding: 'utf8' });
     if (result.status !== 0) {
       process.stderr.write(result.stdout + result.stderr);
       process.exit(result.status ?? 1);
     }
   }
-  // The dSYM bundle of the binary, when the tsan run wrote one.
-  prune(outDir, [...objects, binary, `${binary}.dSYM`]);
+  // The dSYM bundle of the binary, when the tsan run wrote one, and its
+  // PDB on Windows.
+  prune(outDir, [
+    ...objects,
+    binary,
+    `${binary}.dSYM`,
+    binary.replace(/\.exe$/, '.pdb'),
+  ]);
   return binary;
 }
 
@@ -973,7 +1026,13 @@ async function main() {
     );
     run(plain ? 'plain' : 'asan+ubsan', main, {
       UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1',
-      ASAN_OPTIONS: leaks,
+      // The runtime of Windows does not ask the binary for its
+      // __asan_default_options (sfizz_file_pool_test.cpp); the allocation
+      // limit of the fixture comes from here there (ticket 38).
+      ASAN_OPTIONS:
+        process.platform === 'win32'
+          ? `${leaks}:allocator_may_return_null=1:max_allocation_size_mb=1024`
+          : leaks,
     });
   }
   if (!skipRtsan) {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 - 2026-10-24
+
+### Changed
+
+- Build and test the sampler on Windows
+- Document the Windows support
+- Document the Windows behavior in both languages
+- Stop relinking the sampler on every Windows build
+
 ## 0.3.5 - 2026-10-22
 
 ## 0.3.4 - 2026-10-19

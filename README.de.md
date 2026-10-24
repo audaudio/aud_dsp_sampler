@@ -97,6 +97,15 @@ entfällt ohne eines.
   [`src/third_party/NOTICES.md`](src/third_party/NOTICES.md)
 - Die Guides in [`doc/guides`](doc/guides)
 
+## Windows
+
+Der Build-Hook übersetzt sfizz mit MSVC: seine C-Units als C11 mit
+Atomics, seine C++-Units als C++14, mit Exceptions und `<cmath>`, das
+für simde vorab eingebunden wird. Die nativen Tests laufen mit dem
+„C++-Clang-Compiler für Windows“ von Visual Studio, mit ASan und UBSan;
+TSan und RTSan gibt es unter Windows nicht. Die Goldens stammen von arm64
+und stimmen unter Windows auf 1e-3 überein.
+
 ## Code-Beispiele
 
 Der Sampler auf der Engine von `aud_audio` (`aud_audio_ffi.dart` auf

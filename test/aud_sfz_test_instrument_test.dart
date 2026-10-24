@@ -203,6 +203,13 @@ void main() {
     // 48 kHz, the left channel - the instrument is centred, so the right one
     // is the same. Within 1e-5 of the files in test/goldens;
     // UPDATE_GOLDENS=1 writes them.
+    //
+    // The goldens come from clang on arm64. MSVC on x86-64 renders the last
+    // bit of a sample differently from the first frames on; a note played
+    // off its root key resamples, and its differences grow over the voice to
+    // 3.7e-4 (-69 dB) in voice_stealing. Windows compares within 1e-3, which
+    // a wrong voice or envelope still exceeds by far (ticket 38).
+    final goldenTolerance = Platform.isWindows ? 1e-3 : 1e-5;
     group('golden renders', () {
       late AudSfzTestInstrument instrument;
 
@@ -255,7 +262,11 @@ void main() {
           final difference = (left[i] - golden[i]).abs();
           if (difference > largest) largest = difference;
         }
-        expect(largest, lessThan(1e-5), reason: '$name differs by $largest');
+        expect(
+          largest,
+          lessThan(goldenTolerance),
+          reason: '$name differs by $largest',
+        );
       }
 
       // The note on and off of [note] with [velocity] at [at] for [length]
