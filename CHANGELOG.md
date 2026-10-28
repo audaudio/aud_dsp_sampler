@@ -24,6 +24,12 @@
 
 - Lift the lock file to the newest resolvable versions
 
+- Resolve the example together with the package
+
+- Add the example to a pub workspace, resolution: workspace in the example
+- Drop the lock file of the example, the package lock covers it
+- Align the example constraints and the test constraint with the workspace
+
 ## 0.4.0 - 2026-10-24
 
 ### Changed
