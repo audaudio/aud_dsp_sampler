@@ -52,14 +52,13 @@ void main() {
 
       test('dates a new wrapper back to its source', () async {
         final sourceTime = DateTime(2021, 3, 4);
-        File.fromUri(
-          root.uri.resolve('b/lfo.cpp'),
-        ).setLastModifiedSync(sourceTime);
+        File.fromUri(root.uri.resolve('b/lfo.cpp'))
+            .setLastModifiedSync(sourceTime);
         await unique();
         expect(
-          wrapperOf(
-            'b/lfo.cpp',
-          ).lastModifiedSync().isAtSameMomentAs(sourceTime),
+          wrapperOf('b/lfo.cpp')
+              .lastModifiedSync()
+              .isAtSameMomentAs(sourceTime),
           isTrue,
         );
       });

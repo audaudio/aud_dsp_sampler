@@ -1,15 +1,19 @@
 # aud_dsp_sampler
 
-The SFZ sampler of the Audanika Audio Engine: the node `aud.sampler.sfz`
-plays SFZ instruments on the engine of `aud_audio`. It loads them on a
-worker thread of the engine while the old instrument plays on, shares their
-samples between every node of the process within the sample cache budget
-and renders on the audio thread without allocating. Built on the audaudio
-fork of sfizz.
+English | [Deutsch](README.de.md)
+
+[![CI](https://github.com/audaudio/aud_dsp_sampler/actions/workflows/quick_check.yaml/badge.svg)](https://github.com/audaudio/aud_dsp_sampler/actions/workflows/quick_check.yaml)
+
+SFZ sampler node of the Audanika Audio Engine on the sfizz fork: the node
+`aud.sampler.sfz` plays SFZ instruments on the engine of `aud_audio`. It
+loads them on a worker thread of the engine while the old instrument plays
+on, shares their samples between every node of the process within the
+sample cache budget and renders on the audio thread without allocating.
+Built on the audaudio fork of sfizz.
 
 Part of the Audanika Audio Engine; planned in [aud_audio_pm](https://github.com/audaudio/aud_audio_pm).
 
-## Goals
+## Motivation
 
 - SFZ instruments as a node of the engine, played from UMP of MIDI 1.0 and
   2.0 and stored as node presets in graph documents (ticket 25, step S9)
@@ -59,41 +63,7 @@ package itself needs no Flutter. The native tests need Node.js and
 LLVM from Homebrew on macOS (`brew install llvm`), and is skipped without
 one.
 
-## Documentation
-
-- [The plan of ticket 25](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-11-25-build-the-sfz-sampler-on-sfizz-for-ios-and-android.md)
-  with the node, its measurements and findings
-- [The plan of ticket 29](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-29-limit-the-voices-by-the-cpu-power-of-the-device.md)
-  with the voice limit, the voice budget and the stealing
-- [The plan of ticket 30](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-30-render-the-sampler-voices-faster-on-the-big-cores.md)
-  with the faster voice loop and its measurements
-- [The plan of ticket 32](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-14-32-share-sample-sets-between-sfz-presets.md)
-  with the sample sets that presets share, done in ticket 31
-- The decisions behind the package:
-  - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
-    sfizz, forked, as the core of the sampler
-  - [sampler-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-002.md):
-    the package is the audaudio fork of sfizz
-  - [sampler-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-003.md):
-    loads into a standby synth, swapped in with a crossfade
-  - [lifecycle-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/lifecycle-002.md):
-    the resources of the process and the sample cache budget
-  - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
-    the voice limit per node and the voice budget of the process
-  - [sampler-009](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-009.md):
-    the faster voice loop of the fork
-  - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
-    messages to nodes and their answers
-  - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):
-    the audit of the Faust-generated code
-- [The sfizz topic](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/topics/sfizz.md)
-  with what ticket 25 found in sfizz
-- The C API: [`src/aud_dsp_sampler.h`](src/aud_dsp_sampler.h)
-- The components of the fork and their licenses:
-  [`src/third_party/NOTICES.md`](src/third_party/NOTICES.md)
-- The guides in [`doc/guides`](doc/guides)
-
-## Windows
+### Windows
 
 The build hook compiles sfizz with MSVC: its C units as C11 with atomics,
 its C++ units as C++14, with exceptions and `<cmath>` forced in for simde.
@@ -101,7 +71,7 @@ The native tests run with the "C++ Clang compiler for Windows" of Visual
 Studio, with ASan and UBSan; Windows has neither TSan nor RTSan. The
 goldens come from arm64 and match within 1e-3 on Windows.
 
-## Code Examples
+## Usage
 
 The sampler on the engine of `aud_audio` (`aud_audio_ffi.dart` on native
 platforms):
@@ -206,7 +176,7 @@ assets of its APK on an Android device:
 cd example && flutter test integration_test/apk_assets_test.dart -d <device>
 ```
 
-## Load instruments from Android assets
+### Load instruments from Android assets
 
 On Android the sampler reads SFZ files and their samples from the assets of
 the APK in place, without copying them out, the way the legacy audio engine
@@ -246,7 +216,7 @@ graph.setString(
   different folders that reach one sample through different relative paths
   share it.
 
-## Share a sample set between presets
+### Share a sample set between presets
 
 A sample set - its samples with their keys, roots and loop points - can
 exist once, and every preset that plays it includes its regions instead of
@@ -306,7 +276,58 @@ A region without a key range keeps all keys either way. The opcode holds
 for the regions that follow it, until the next load. Without it nothing
 changes.
 
-## How It Works
+## Limitations
+
+- `apk:/` paths read the assets of an Android app only; on the other
+  platforms such a load ends with `AUD_ERROR_UNSUPPORTED`
+- Of MIDI 2.0 the node takes notes, control changes, pitch bend, channel
+  and poly pressure and program changes; the other per-note messages have
+  no counterpart in sfizz and count as `AUD_ERROR_UNSUPPORTED`
+- A message with a string or a blob argument, or with more than four
+  arguments, is refused, since sfizz would copy or parse it on the audio
+  thread
+- SFZ instruments are trusted input: an SFZ file can `#include` or play any
+  file the app can read; the sandbox of the app bounds what it reaches
+- A sample with more than 2^31 - 1 frames, or one that is neither mono nor
+  stereo, is refused and named as missing
+- The native tests run without the RealtimeSanitizer and the
+  ThreadSanitizer on Windows, which has neither
+
+## Documentation
+
+- [The plan of ticket 25](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-11-25-build-the-sfz-sampler-on-sfizz-for-ios-and-android.md)
+  with the node, its measurements and findings
+- [The plan of ticket 29](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-29-limit-the-voices-by-the-cpu-power-of-the-device.md)
+  with the voice limit, the voice budget and the stealing
+- [The plan of ticket 30](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-13-30-render-the-sampler-voices-faster-on-the-big-cores.md)
+  with the faster voice loop and its measurements
+- [The plan of ticket 32](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/tickets/2026-10-14-32-share-sample-sets-between-sfz-presets.md)
+  with the sample sets that presets share, done in ticket 31
+- The decisions behind the package:
+  - [sampler-001](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-001.md):
+    sfizz, forked, as the core of the sampler
+  - [sampler-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-002.md):
+    the package is the audaudio fork of sfizz
+  - [sampler-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-003.md):
+    loads into a standby synth, swapped in with a crossfade
+  - [lifecycle-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/lifecycle-002.md):
+    the resources of the process and the sample cache budget
+  - [sampler-008](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-008.md):
+    the voice limit per node and the voice budget of the process
+  - [sampler-009](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/sampler-009.md):
+    the faster voice loop of the fork
+  - [osc-002](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/osc-002.md):
+    messages to nodes and their answers
+  - [license-003](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/decisions/license-003.md):
+    the audit of the Faust-generated code
+- [The sfizz topic](https://github.com/audaudio/aud_audio_pm/blob/main/doc/2026-Q4/concepts/topics/sfizz.md)
+  with what ticket 25 found in sfizz
+- The C API: [`src/aud_dsp_sampler.h`](src/aud_dsp_sampler.h)
+- The components of the fork and their licenses:
+  [`src/third_party/NOTICES.md`](src/third_party/NOTICES.md)
+- The guides in [`doc/guides`](doc/guides)
+
+## How it works
 
 ### The node
 
@@ -570,8 +591,20 @@ node scripts/test-native.js
   beside it; Apple's `atos` hung on reports of races. `AUD_RTSAN_CXX`
   names the compiler of the RealtimeSanitizer build.
 
+## Status
+
+Before 1.0 — the API may change between minor versions. The node, its loads, the sample store, the voice
+limits and the shared sample sets are done (tickets 25 and 28 to 31).
+
 ## Contributing
 
 Tickets run through the `gg` workflow: see the
 [Develop Guide](doc/guides/develop-guide.md) and the
 [Review Guide](doc/guides/for-ai/ai-review-guide.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE). The fork of sfizz under `src/third_party`
+is BSD-2-Clause like sfizz and keeps the licenses of its components;
+[`src/third_party/NOTICES.md`](src/third_party/NOTICES.md) names them and
+the audit.
