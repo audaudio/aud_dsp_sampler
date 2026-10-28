@@ -47,13 +47,13 @@ dependencies:
     git:
       url: git@github.com:audaudio/aud_audio_core.git
       tag_pattern: "{{version}}"
-    version: ^0.5.4
+    version: ^0.6.1
   aud_audio_graph:
     git:
       url: git@github.com:audaudio/aud_audio_graph.git
       tag_pattern: "{{version}}"
-    version: ^0.5.4
-  aud_midi_standard: ^0.2.0
+    version: ^0.6.1
+  aud_midi_standard: ^0.3.0
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

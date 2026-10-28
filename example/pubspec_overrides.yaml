@@ -1,4 +1,0 @@
-# The example resolves the family from the git tags of the package, like the
-# package itself; a ticket with sibling checkouts of unreleased versions adds
-# them here as path overrides.
-dependency_overrides: {}
