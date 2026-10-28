@@ -66,9 +66,9 @@ void main() {
     test('names every member that AudDspSampler records', () async {
       final file = await Isolate.resolvePackageUri(Uri.parse(samplerLibrary));
       final source = File.fromUri(file!).readAsStringSync();
-      final body = RegExp(
-        r'class AudDspSampler \{([\s\S]*?)\n\}',
-      ).firstMatch(source)!.group(1)!;
+      final body = RegExp(r'class AudDspSampler \{([\s\S]*?)\n\}')
+          .firstMatch(source)!
+          .group(1)!;
       const sampler = Class('AudDspSampler', Library(samplerLibrary));
       // The declaration after each @RecordUse() up to its parameters or its
       // body, e.g. `static int get storeBytes`.

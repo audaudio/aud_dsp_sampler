@@ -110,9 +110,9 @@ void main() {
     });
 
     test('maps every key to one region', () {
-      final regions = RegExp(
-        r'pitch_keycenter=(\d+) lokey=(\d+) hikey=(\d+)',
-      ).allMatches(AudSfzTestInstrument.sfz).toList();
+      final regions = RegExp(r'pitch_keycenter=(\d+) lokey=(\d+) hikey=(\d+)')
+          .allMatches(AudSfzTestInstrument.sfz)
+          .toList();
       expect(regions, hasLength(AudSfzTestInstrument.rootKeys.length));
       var next = 0;
       for (final region in regions) {

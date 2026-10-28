@@ -6,7 +6,7 @@ homepage: https://github.com/audaudio/aud_dsp_sampler
 repository: https://github.com/audaudio/aud_dsp_sampler
 
 environment:
-  sdk: ^3.12.2
+  sdk: ^3.13.0
 
 dependencies:
   ffi: ^2.2.0
@@ -29,10 +29,10 @@ dev_dependencies:
       tag_pattern: "{{version}}"
     version: ^0.5.5
   aud_midi_standard: ^0.1.1
-  dna_audanika: ^0.0.2
+  dna_audanika: ^0.1.0
   ffigen: ^23.0.0
   flutter_lints: ^6.0.0
-  helix: ^1.13.0
+  helix: ^1.14.0
   test: ^1.33.0
 
 # Builds the Java shim in android/ into Android apps: a content provider

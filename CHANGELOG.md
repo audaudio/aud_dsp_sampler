@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Require Dart 3.13 and upgrade the dependencies
+
+- Require Dart 3.13
+- Upgrade dna_audanika to ^0.1.0
+- Upgrade helix to ^1.14.0
+- Set the identity the DNA layers ask for in dna/_vars.json
+- Reformat 4 files with the Dart 3.13 formatter
+- Add the blog post of this change, in English and German
+- Bring the README to the README template, in English and German
+
 ## 0.4.0 - 2026-10-24
 
 ### Changed
@@ -36,6 +50,7 @@
 - The FLAC writer of the native tests in named steps: FlacBits with its CRC, STREAMINFO, the smpl loop, a frame; the files it writes stay byte for byte the same
 
 - kLevel and since() move into the test fixture; the sample set test builds its loop opcodes from kLoopStart and kLoopEnd and compares the paths the backend opened as whole lists
+
 
 ## 0.3.3 - 2026-10-15
 
@@ -127,6 +142,7 @@
 
 - The German README names the interpolation and the envelope
 
+
 ## 0.3.2 - 2026-10-14
 
 ### Added
@@ -172,6 +188,7 @@
 - The steps of max_voices from kNoVoiceLimit; a compile-time check that the voice counters take no lock
 
 - The parameters of stealVoices and fadeOutStolen documented; the equality test of AudSfzVoiceStats as a loop
+
 
 ## 0.3.1 - 2026-10-14
 
@@ -353,6 +370,7 @@
 - RbjFilters.hpp carries the BSD-2-Clause header of sfizz with the copyright of Audanika instead of the MIT header of the package
 
 - NOTICES.md and the READMEs: the noted changes and RbjFilters.hpp are BSD-2-Clause like sfizz, so that the fork has one license
+
 
 ## 0.1.0 - 2026-10-08
 
