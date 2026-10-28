@@ -39,21 +39,21 @@ packages:
       path: "../aud_audio_core"
       relative: true
     source: path
-    version: "0.5.4"
+    version: "0.6.0"
   aud_audio_graph:
     dependency: "direct dev"
     description:
       path: "../aud_audio_graph"
       relative: true
     source: path
-    version: "0.5.5"
+    version: "0.6.0"
   aud_midi_standard:
     dependency: "direct dev"
     description:
       path: "../aud_midi_standard"
       relative: true
     source: path
-    version: "0.2.0"
+    version: "0.3.0"
   boolean_selector:
     dependency: transitive
     description:
