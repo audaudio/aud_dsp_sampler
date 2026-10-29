@@ -32,7 +32,7 @@ dev_dependencies:
     git:
       url: git@github.com:audaudio/aud_audio_graph.git
       tag_pattern: "{{version}}"
-    version: ^0.6.1
+    version: ^0.6.2
   aud_midi_standard: ^0.3.0
   dna_audanika: ^0.1.0
   ffigen: ^23.0.0
