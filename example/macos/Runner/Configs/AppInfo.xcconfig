@@ -8,7 +8,7 @@
 PRODUCT_NAME = aud_dsp_sampler_example
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.audanika.audDspSampler
+PRODUCT_BUNDLE_IDENTIFIER = com.example.audDspSampler
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.audanika. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
