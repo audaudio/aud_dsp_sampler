@@ -7,7 +7,7 @@
 import 'dart:convert';
 
 import 'package:aud_dsp_sampler/aud_dsp_sampler_ffi.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Whether the app reads the store of the sampler: built with
 /// `--dart-define=AUD_USE_SAMPLER=true` it does and so keeps the native
